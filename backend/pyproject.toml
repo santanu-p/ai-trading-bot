@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tradingbot"
+version = "0.1.0"
+description = "Multi-agent intraday trading bot API and worker services."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.16.0",
+  "celery[redis]>=5.5.0",
+  "fastapi>=0.115.0",
+  "openai>=1.75.0",
+  "psycopg[binary]>=3.2.0",
+  "python-jose[cryptography]>=3.4.0",
+  "sqlalchemy>=2.0.40",
+  "uvicorn>=0.34.0"
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0"
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

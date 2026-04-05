@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://tradingbot.local/schemas/committee-decision.schema.json",
+  "title": "CommitteeDecision",
+  "type": "object",
+  "required": [
+    "symbol",
+    "direction",
+    "confidence",
+    "entry",
+    "stop_loss",
+    "take_profit",
+    "time_horizon",
+    "status",
+    "thesis"
+  ],
+  "properties": {
+    "symbol": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10
+    },
+    "direction": {
+      "type": "string",
+      "enum": ["buy", "sell", "hold"]
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "entry": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "stop_loss": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "take_profit": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "time_horizon": {
+      "type": "string",
+      "enum": ["intraday", "multi-session"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["approved", "rejected"]
+    },
+    "thesis": {
+      "type": "string",
+      "minLength": 1
+    },
+    "reject_reason": {
+      "type": ["string", "null"]
+    },
+    "market_vote": {
+      "type": ["string", "null"]
+    },
+    "news_vote": {
+      "type": ["string", "null"]
+    },
+    "risk_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}
+
