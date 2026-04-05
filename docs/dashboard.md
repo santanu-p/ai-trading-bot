@@ -73,8 +73,8 @@ Settings displays editable fields for all configurable guardrails and the watchl
 
 - The UI is built without a component library.
 - Styling is contained in `web/app/globals.css`.
-- The main surface is [dashboard-screen.tsx](/D:/project1/web/src/components/dashboard-screen.tsx).
-- API helpers live in [api.ts](/D:/project1/web/src/lib/api.ts).
+- The main surface is [dashboard-screen.tsx](../web/src/components/dashboard-screen.tsx).
+- API helpers live in [api.ts](../web/src/lib/api.ts).
 
 ## Current Limitations
 

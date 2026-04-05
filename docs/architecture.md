@@ -37,9 +37,9 @@ Responsibilities:
 
 Key files:
 
-- [main.py](/D:/project1/backend/src/tradingbot/api/main.py)
-- [dependencies.py](/D:/project1/backend/src/tradingbot/api/dependencies.py)
-- [trading.py](/D:/project1/backend/src/tradingbot/api/routers/trading.py)
+- [main.py](../backend/src/tradingbot/api/main.py)
+- [dependencies.py](../backend/src/tradingbot/api/dependencies.py)
+- [trading.py](../backend/src/tradingbot/api/routers/trading.py)
 
 ### Schema Layer
 

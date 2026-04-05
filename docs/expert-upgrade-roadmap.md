@@ -4,6 +4,21 @@ This file describes what to add or modify in the future to move this repository 
 
 Important: "expert-grade" here means stronger research quality, execution quality, risk discipline, observability, and operational safety. It does not mean guaranteed profits.
 
+For the production deployment, safety, and recovery path, see [production-hardening-plan.md](production-hardening-plan.md).
+
+## Critical Scope Decision
+
+The repo now asks the operator to choose patterns such as intraday, delivery, futures, and options, but the current execution layer is still Alpaca-oriented and cash-equity only.
+
+Before treating this as a real auto-trading system, make this decision explicit:
+
+1. `US equities expert bot`
+   Keep Alpaca and narrow real execution to supported US cash-equity workflows.
+2. `Multi-market / F&O expert bot`
+   Keep Alpaca for US equities, but add one or more broker adapters that actually support delivery, futures, and options for the target market.
+
+Until that scope decision is implemented in code, non-cash-equity patterns should stay analysis-only by design.
+
 ## Current Baseline
 
 The current repo already has:
@@ -14,28 +29,87 @@ The current repo already has:
 - OpenAI-based market/news agent hooks
 - deterministic risk validation
 - a Next.js operator dashboard
+- a first-step intake for trading pattern, instrument class, strategy family, risk profile, and market universe
 
-The biggest gaps are not UI polish. They are research depth, execution realism, risk sophistication, evaluation discipline, and production hardening.
+The biggest gaps are not UI polish. They are broker coverage, order lifecycle realism, research depth, risk sophistication, evaluation discipline, and production hardening.
+
+## Current Execution Reality
+
+The missing features that matter most right now are concrete:
+
+- [adapters.py](../backend/src/tradingbot/services/adapters.py) only exposes a narrow Alpaca bracket-order path.
+- [execution.py](../backend/src/tradingbot/services/execution.py) assumes a simplified submit-and-persist flow rather than a full broker lifecycle.
+- [tasks.py](../backend/src/tradingbot/worker/tasks.py) both decides and executes in one pass, which is fragile for live trading.
+- [store.py](../backend/src/tradingbot/services/store.py) correctly blocks unsupported profile selections, but those selections are still not broker-backed.
+- There is no explicit support yet for partial fills, cancel/replace, child-order repair, reconciliation, broker streams, derivatives contracts, lot sizes, or multi-broker routing.
 
 ## Priority Order
 
 Recommended order:
 
-1. Safety and correctness
-2. Research and backtesting quality
-3. Data quality and feature depth
-4. Execution quality
-5. Portfolio construction
-6. Model/agent sophistication
-7. Production operations and scaling
+1. Market scope and broker alignment
+2. Safety and correctness
+3. Broker execution completeness
+4. Research and backtesting quality
+5. Data quality and feature depth
+6. Portfolio construction
+7. Model and agent sophistication
+8. Production operations and scaling
 
-## Phase 1: Fix The Foundations
+## Phase 0: Align Market Scope And Broker Coverage
 
-### 1. Replace startup table creation with real migrations
+### Make product support explicit in the UX and API
 
 Current issue:
 
-- [main.py](/D:/project1/backend/src/tradingbot/api/main.py) uses `Base.metadata.create_all(...)`
+- the intake can capture delivery, futures, and options intent, but execution support is still limited
+
+What to add or modify:
+
+- split `selected_for_analysis` from `supported_for_execution`
+- show a capability matrix in the dashboard
+- block live start when the chosen profile is not executable with the selected broker
+- persist the reason for any analysis-only downgrade
+
+Suggested files:
+
+- [store.py](../backend/src/tradingbot/services/store.py)
+- [settings.py](../backend/src/tradingbot/schemas/settings.py)
+- [dashboard-screen.tsx](../web/src/components/dashboard-screen.tsx)
+- [agent-intake.tsx](../web/src/components/agent-intake.tsx)
+
+### Decide the real broker families this repo will support
+
+Current issue:
+
+- Alpaca is a good fit for the current scaffold, but it is not a generic answer for delivery plus futures plus options across markets
+
+What to add or modify:
+
+- decide whether v2 is Alpaca-only US equities, Alpaca plus a derivatives-capable broker family, or true multi-broker routing by asset class and venue
+- persist broker account metadata such as venue, timezone, base currency, permissions, and account type
+- move broker selection into bot settings instead of assuming one broker path
+
+### Add a broker capability registry
+
+What to add or modify:
+
+- define capabilities such as cash equities, shorting, futures, options, bracket or OCO orders, stop-market and stop-limit, replace and cancel, websocket order streams, and paper and live modes
+- require capability checks before agent prompting, risk approval, and broker execution
+
+Suggested files:
+
+- new `backend/src/tradingbot/services/broker_capabilities.py`
+- expand [adapters.py](../backend/src/tradingbot/services/adapters.py)
+- expand [store.py](../backend/src/tradingbot/services/store.py)
+
+## Phase 1: Fix The Foundations
+
+### Replace startup table creation with real migrations
+
+Current issue:
+
+- [main.py](../backend/src/tradingbot/api/main.py) uses `Base.metadata.create_all(...)`
 
 What to add or modify:
 
@@ -47,25 +121,26 @@ Why:
 
 - expert systems need reproducible schema evolution and safe deploys
 
-### 2. Add explicit market-hours and trading-calendar gating
+### Add explicit market-hours and trading-calendar gating
 
 Current issue:
 
-- the worker runs on a fixed interval but does not yet enforce exchange calendars or holiday handling
+- the worker runs on a fixed interval but does not yet enforce exchange calendars, holiday handling, or product-session rules
 
 What to add or modify:
 
 - add a market calendar service in `backend/src/tradingbot/services/`
 - block scans and order submission outside market hours
-- support half-days and US holidays
+- support half-days, venue-specific timezones, and product sessions
+- add session-aware rules such as end-of-day flattening when required by the strategy or product type
 
 Suggested files:
 
 - new `backend/src/tradingbot/services/calendar.py`
-- update [tasks.py](/D:/project1/backend/src/tradingbot/worker/tasks.py)
-- update [execution.py](/D:/project1/backend/src/tradingbot/services/execution.py)
+- update [tasks.py](../backend/src/tradingbot/worker/tasks.py)
+- update [execution.py](../backend/src/tradingbot/services/execution.py)
 
-### 3. Separate paper and live safety modes more aggressively
+### Separate paper and live safety modes more aggressively
 
 Current issue:
 
@@ -77,15 +152,35 @@ What to add or modify:
 - add environment-level live trading allowlist
 - require human approval or multi-step confirmation for live orders
 - log every live order decision path
+- add manual flatten-all and broker kill actions
 
 Suggested files:
 
-- [settings.py](/D:/project1/backend/src/tradingbot/schemas/settings.py)
-- [models.py](/D:/project1/backend/src/tradingbot/models.py)
-- [trading.py](/D:/project1/backend/src/tradingbot/api/routers/trading.py)
-- dashboard settings UI in [dashboard-screen.tsx](/D:/project1/web/src/components/dashboard-screen.tsx)
+- [settings.py](../backend/src/tradingbot/schemas/settings.py)
+- [models.py](../backend/src/tradingbot/models.py)
+- [trading.py](../backend/src/tradingbot/api/routers/trading.py)
+- dashboard settings UI in [dashboard-screen.tsx](../web/src/components/dashboard-screen.tsx)
 
-### 4. Harden auth and operator controls
+### Split decisioning from execution
+
+Current issue:
+
+- [tasks.py](../backend/src/tradingbot/worker/tasks.py) both decides and submits orders in one path
+
+What to add or modify:
+
+- queue approved order intents to a dedicated execution worker
+- make the handoff idempotent
+- re-check kill switch, market hours, and broker connectivity at the execution boundary
+- isolate model failures from broker failures
+
+Suggested files:
+
+- [tasks.py](../backend/src/tradingbot/worker/tasks.py)
+- new `backend/src/tradingbot/worker/execution_tasks.py`
+- expand [execution.py](../backend/src/tradingbot/services/execution.py)
+
+### Harden auth and operator controls
 
 Current issue:
 
@@ -98,9 +193,114 @@ What to add or modify:
 - add role-based access for operator, reviewer, admin
 - add session expiry, audit trail filtering, and forced logout support
 
-## Phase 2: Build Real Research Quality
+## Phase 2: Build Real Broker Execution
 
-### 5. Upgrade backtesting from placeholder to research engine
+### Expand `BrokerAdapter` into a full execution interface
+
+Current issue:
+
+- the current adapter shape is enough for a scaffold but not for a production trading engine
+
+What to add or modify:
+
+- add methods for account snapshots, open orders, positions, place order, replace order, cancel order, cancel all orders, get order by broker ID, and fetch fills
+- separate market-data adapters cleanly from execution adapters
+- add broker-specific error normalization
+
+Suggested files:
+
+- expand [adapters.py](../backend/src/tradingbot/services/adapters.py)
+- expand [execution.py](../backend/src/tradingbot/services/execution.py)
+
+### Add a real order state machine
+
+Current issue:
+
+- local orders are persisted with a simplified status model
+
+What to add or modify:
+
+- represent new, accepted, pending-trigger, partially-filled, filled, canceled, expired, replaced, rejected, and suspended states
+- persist every transition with timestamps
+- show lifecycle history in the dashboard
+
+Suggested files:
+
+- [models.py](../backend/src/tradingbot/models.py)
+- [execution.py](../backend/src/tradingbot/services/execution.py)
+- dashboard routes under `web/app/`
+
+### Add broker reconciliation and event ingestion
+
+Current issue:
+
+- broker truth and local database truth can drift with no recovery path
+
+What to add or modify:
+
+- poll or stream orders and positions from the broker
+- reconcile local state with broker state on a schedule
+- flag mismatches as high-priority events
+- pause live trading on unresolved mismatches
+- persist every state transition, fill, reject, and cancel event
+
+Suggested files:
+
+- new `backend/src/tradingbot/services/reconciliation.py`
+- expand [adapters.py](../backend/src/tradingbot/services/adapters.py)
+- expand [execution.py](../backend/src/tradingbot/services/execution.py)
+
+### Add pre-trade broker and exchange validation
+
+What to add or modify:
+
+- validate tick size, lot size, contract multiplier, expiry state, option chain availability, shortability, buying power, margin usage, exchange order caps, and price bands
+- reject structurally invalid orders before broker submission
+
+Suggested files:
+
+- new `backend/src/tradingbot/services/pretrade.py`
+- expand [risk.py](../backend/src/tradingbot/services/risk.py)
+- expand [execution.py](../backend/src/tradingbot/services/execution.py)
+
+### Add support for real order types and exit handling
+
+What to add or modify:
+
+- support the broker-capable subset of market, limit, stop-market, stop-limit, bracket, OCO, trailing stop, and IOC/FOK/GTC where supported
+- add replace and amend flows
+- repair broken child orders
+- flatten positions when kill switch or end-of-session rules require it
+
+### Add derivatives and contract-master support
+
+Current issue:
+
+- futures and options can be selected in the intake, but there is no executable contract model behind them
+
+What to add or modify:
+
+- add an instrument master for equities, futures, and options
+- store contract metadata such as expiry, strike, right, multiplier, lot size, exchange, and symbol mapping
+- add option-chain selection logic and futures rollover rules
+- support single-leg options first, then spreads only after risk and reconciliation are solid
+
+Suggested files:
+
+- new `backend/src/tradingbot/services/contracts.py`
+- expand [models.py](../backend/src/tradingbot/models.py)
+
+### Add multi-broker routing when needed
+
+What to add or modify:
+
+- route by market, instrument class, and account permissions
+- isolate one broker outage from the rest of the system
+- keep broker-specific translations out of agent prompts and core risk logic
+
+## Phase 3: Build Real Research Quality
+
+### Upgrade backtesting from placeholder to research engine
 
 Current issue:
 
@@ -116,12 +316,12 @@ What to add or modify:
 
 Suggested files:
 
-- expand [backtest.py](/D:/project1/backend/src/tradingbot/services/backtest.py)
-- expand [tasks.py](/D:/project1/backend/src/tradingbot/worker/tasks.py)
-- add backtest result models to [models.py](/D:/project1/backend/src/tradingbot/models.py)
+- expand [backtest.py](../backend/src/tradingbot/services/backtest.py)
+- expand [tasks.py](../backend/src/tradingbot/worker/tasks.py)
+- add backtest result models to [models.py](../backend/src/tradingbot/models.py)
 - add backtest API endpoints and dashboard views
 
-### 6. Add walk-forward testing and regime evaluation
+### Add walk-forward testing and regime evaluation
 
 What to add or modify:
 
@@ -133,7 +333,7 @@ Why:
 
 - expert systems must survive outside one lucky sample
 
-### 7. Add replay datasets and deterministic fixtures
+### Add replay datasets and deterministic fixtures
 
 What to add or modify:
 
@@ -146,9 +346,9 @@ Suggested files:
 - `backend/tests/fixtures/`
 - more test coverage under `backend/tests/`
 
-## Phase 3: Expand Data Depth
+## Phase 4: Expand Data Depth
 
-### 8. Add richer market features
+### Add richer market features
 
 Current issue:
 
@@ -166,10 +366,10 @@ What to add or modify:
 
 Suggested files:
 
-- expand [indicators.py](/D:/project1/backend/src/tradingbot/services/indicators.py)
+- expand [indicators.py](../backend/src/tradingbot/services/indicators.py)
 - add feature engineering service modules
 
-### 9. Add structured event data
+### Add structured event data
 
 What to add or modify:
 
@@ -183,7 +383,7 @@ Why:
 
 - many bad trades are bad because the context is incomplete
 
-### 10. Add data validation and freshness checks
+### Add data validation and freshness checks
 
 What to add or modify:
 
@@ -194,12 +394,12 @@ What to add or modify:
 
 Suggested files:
 
-- [adapters.py](/D:/project1/backend/src/tradingbot/services/adapters.py)
+- [adapters.py](../backend/src/tradingbot/services/adapters.py)
 - new validation module in `backend/src/tradingbot/services/`
 
-## Phase 4: Improve Agent Intelligence
+## Phase 5: Improve Agent Intelligence
 
-### 11. Move from two-agent prompts to a structured committee
+### Move from two-agent prompts to a structured committee
 
 Current issue:
 
@@ -217,11 +417,11 @@ What to add or modify:
 
 Suggested files:
 
-- expand [agents.py](/D:/project1/backend/src/tradingbot/services/agents.py)
-- expand [committee.py](/D:/project1/backend/src/tradingbot/services/committee.py)
+- expand [agents.py](../backend/src/tradingbot/services/agents.py)
+- expand [committee.py](../backend/src/tradingbot/services/committee.py)
 - add agent prompt/version registry
 
-### 12. Add prompt and model versioning
+### Add prompt and model versioning
 
 What to add or modify:
 
@@ -233,7 +433,7 @@ Why:
 
 - expert systems need explainable changes and measurable iteration
 
-### 13. Add strict output validation and repair flow
+### Add strict output validation and repair flow
 
 What to add or modify:
 
@@ -243,11 +443,11 @@ What to add or modify:
 
 Suggested files:
 
-- [committee-decision.schema.json](/D:/project1/contracts/committee-decision.schema.json)
-- [schemas/trading.py](/D:/project1/backend/src/tradingbot/schemas/trading.py)
-- [agents.py](/D:/project1/backend/src/tradingbot/services/agents.py)
+- [committee-decision.schema.json](../contracts/committee-decision.schema.json)
+- [schemas/trading.py](../backend/src/tradingbot/schemas/trading.py)
+- [agents.py](../backend/src/tradingbot/services/agents.py)
 
-### 14. Add post-trade review and feedback loops
+### Add post-trade review and feedback loops
 
 What to add or modify:
 
@@ -259,9 +459,9 @@ What to add or modify:
   - avoidable risk
 - build a review queue for recurring failure patterns
 
-## Phase 5: Upgrade Risk Into A Real Portfolio Engine
+## Phase 6: Upgrade Risk Into A Real Portfolio Engine
 
-### 15. Replace symbol-level checks with portfolio-aware risk
+### Replace symbol-level checks with portfolio-aware risk
 
 Current issue:
 
@@ -277,10 +477,10 @@ What to add or modify:
 
 Suggested files:
 
-- [risk.py](/D:/project1/backend/src/tradingbot/services/risk.py)
-- [execution.py](/D:/project1/backend/src/tradingbot/services/execution.py)
+- [risk.py](../backend/src/tradingbot/services/risk.py)
+- [execution.py](../backend/src/tradingbot/services/execution.py)
 
-### 16. Add dynamic position sizing
+### Add dynamic position sizing
 
 What to add or modify:
 
@@ -289,7 +489,7 @@ What to add or modify:
 - equity-curve based throttling
 - strategy confidence scaling
 
-### 17. Add drawdown and circuit-breaker logic
+### Add drawdown and circuit-breaker logic
 
 What to add or modify:
 
@@ -298,7 +498,7 @@ What to add or modify:
 - require manual review after repeated execution failures
 - auto-enable kill switch after severe anomalies
 
-### 18. Add symbol cooldowns that reflect outcome and context
+### Add symbol cooldowns that reflect outcome and context
 
 What to add or modify:
 
@@ -306,9 +506,9 @@ What to add or modify:
 - longer cooldown after high-volatility event failures
 - avoid immediate re-entry after news whipsaws
 
-## Phase 6: Improve Execution Quality
+## Phase 7: Optimize Execution Quality
 
-### 19. Model real execution, not just decision quality
+### Model real execution, not just decision quality
 
 Current issue:
 
@@ -321,31 +521,33 @@ What to add or modify:
 - reject trades with poor fill quality expectations
 - adapt order type and aggressiveness to liquidity
 
-### 20. Add broker reconciliation
+### Add venue, liquidity, and routing logic
 
 What to add or modify:
 
-- poll or sync orders and positions from Alpaca
-- reconcile broker truth with local database truth
-- flag mismatches as high-priority events
+- avoid thin names or unstable spreads
+- pick order aggressiveness from liquidity and spread conditions
+- route by venue or broker when more than one execution path exists
+- reject trades with poor expected fill quality
 
 Suggested files:
 
-- [adapters.py](/D:/project1/backend/src/tradingbot/services/adapters.py)
-- [execution.py](/D:/project1/backend/src/tradingbot/services/execution.py)
-- new reconciliation worker task
+- [adapters.py](../backend/src/tradingbot/services/adapters.py)
+- [execution.py](../backend/src/tradingbot/services/execution.py)
+- new routing logic in `backend/src/tradingbot/services/`
 
-### 21. Add order state machine support
+### Add execution analytics and post-trade TCA
 
 What to add or modify:
 
-- represent pending, partially filled, canceled, expired, and replaced states explicitly
-- persist state transitions and timestamps
-- show lifecycle history in the dashboard
+- measure intended entry versus actual fill
+- measure slippage, spread cost, cancel rate, reject rate, and time-to-fill
+- compare execution quality by symbol, venue, broker, and order type
+- feed poor execution outcomes back into symbol selection and risk sizing
 
-## Phase 7: Improve Observability And Operations
+## Phase 8: Improve Observability And Operations
 
-### 22. Add structured logging and metrics
+### Add structured logging and metrics
 
 What to add or modify:
 
@@ -355,7 +557,7 @@ What to add or modify:
 - counters for approvals, rejections, malformed outputs, execution failures
 - latency metrics for Alpaca and OpenAI calls
 
-### 23. Add alerts
+### Add alerts
 
 What to add or modify:
 
@@ -364,7 +566,7 @@ What to add or modify:
 - notify on broker reconciliation mismatch
 - notify on unusually high rejection rates or malformed agent outputs
 
-### 24. Add dashboard depth for operators
+### Add dashboard depth for operators
 
 What to add or modify:
 
@@ -376,12 +578,12 @@ What to add or modify:
 
 Suggested files:
 
-- [dashboard-screen.tsx](/D:/project1/web/src/components/dashboard-screen.tsx)
+- [dashboard-screen.tsx](../web/src/components/dashboard-screen.tsx)
 - new route pages under `web/app/`
 
-## Phase 8: Improve Testing And Release Discipline
+## Phase 9: Improve Testing And Release Discipline
 
-### 25. Expand tests beyond unit checks
+### Expand tests beyond unit checks
 
 What to add or modify:
 
@@ -391,7 +593,7 @@ What to add or modify:
 - model payload validation tests
 - end-to-end replay tests
 
-### 26. Add CI and quality gates
+### Add CI and quality gates
 
 What to add or modify:
 
@@ -401,7 +603,7 @@ What to add or modify:
 - replay regression tests
 - schema drift checks
 
-### 27. Add release notes for strategy changes
+### Add release notes for strategy changes
 
 What to add or modify:
 
@@ -412,7 +614,10 @@ What to add or modify:
 
 High-value additions:
 
+- `backend/src/tradingbot/services/broker_capabilities.py`
 - `backend/src/tradingbot/services/calendar.py`
+- `backend/src/tradingbot/services/contracts.py`
+- `backend/src/tradingbot/services/pretrade.py`
 - `backend/src/tradingbot/services/reconciliation.py`
 - `backend/src/tradingbot/services/portfolio.py`
 - `backend/src/tradingbot/services/features.py`
@@ -421,19 +626,33 @@ High-value additions:
 - `backend/src/tradingbot/services/alerts.py`
 - `backend/src/tradingbot/api/routers/backtests.py`
 - `backend/src/tradingbot/api/routers/performance.py`
+- `backend/src/tradingbot/worker/execution_tasks.py`
 - `backend/src/tradingbot/worker/replay_tasks.py`
 - `backend/tests/fixtures/`
 - `docs/strategy-change-log.md`
+
+## Must-Have Features Before Calling This A Real Auto-Trading Bot
+
+Minimum bar:
+
+- real broker capability mapping, not assumed execution
+- full order lifecycle handling with partial fills and cancel or replace
+- broker reconciliation against local truth
+- market calendar and session gating
+- realistic backtests with fill modeling
+- portfolio-aware risk and circuit breakers
+- operator-visible live safety controls
+- deterministic handling of unsupported products and broken broker states
 
 ## Suggested Immediate Next 5 Upgrades
 
 If the goal is maximum improvement for the next development cycle, do these first:
 
-1. Add Alembic migrations and remove `create_all` startup schema creation.
-2. Implement real backtest persistence and performance metrics.
-3. Add market calendar enforcement and stale-data checks.
-4. Add broker reconciliation and explicit order lifecycle states.
-5. Upgrade the risk engine to portfolio-aware sizing and drawdown circuit breakers.
+1. Decide Alpaca-only versus multi-broker and encode that choice in a broker capability registry.
+2. Refactor the execution path into a dedicated execution worker with a real order state model.
+3. Implement broker reconciliation plus polling or streaming order updates.
+4. Add market calendar enforcement and pre-trade validation for tick size, lot size, and product support.
+5. Upgrade backtesting and risk so execution behavior is simulated with realistic fills, rejects, and drawdown rules.
 
 ## Definition Of "Expert" For This Repo
 
@@ -441,9 +660,10 @@ This bot becomes meaningfully closer to expert-grade when it can do all of the f
 
 - explain why it entered or rejected a trade
 - prove the strategy across replay and walk-forward tests
+- execute only products the broker and venue actually support
+- manage the full lifecycle of entries, exits, fills, cancels, and replacements
 - protect capital with deterministic portfolio-aware risk
-- handle bad provider responses safely
+- handle bad provider and broker responses safely
 - reconcile broker truth with internal truth
 - surface failures clearly to the operator
-- evolve prompts, models, and thresholds without losing auditability
-
+- evolve prompts, models, broker support, and thresholds without losing auditability

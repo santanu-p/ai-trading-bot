@@ -25,7 +25,7 @@ No dependencies were installed and no services were started while creating this 
   - kill switch
   - settings and watchlist updates
   - decision/order/risk visibility
-- Shared decision contract in [committee-decision.schema.json](/D:/project1/contracts/committee-decision.schema.json)
+- Shared decision contract in [committee-decision.schema.json](contracts/committee-decision.schema.json)
 
 ## What This Repo Does Not Yet Do
 
@@ -81,6 +81,7 @@ No dependencies were installed and no services were started while creating this 
 - [Deployment notes](./docs/deployment.md)
 - [Operations runbook](./docs/operations.md)
 - [Expert upgrade roadmap](./docs/expert-upgrade-roadmap.md)
+- [Production hardening plan](./docs/production-hardening-plan.md)
 
 ## Verification Performed
 

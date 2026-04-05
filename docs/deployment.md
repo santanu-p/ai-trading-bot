@@ -45,3 +45,4 @@ This scaffold does not yet include:
 - observability stack wiring
 - scheduled trading-calendar gating
 
+For the step-by-step path from this scaffold to a hardened deployment target, see [production-hardening-plan.md](production-hardening-plan.md).
