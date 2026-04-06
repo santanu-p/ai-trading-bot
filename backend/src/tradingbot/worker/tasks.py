@@ -7,11 +7,11 @@ from sqlalchemy import select
 
 from tradingbot.config import get_settings
 from tradingbot.db import SessionLocal
-from tradingbot.enums import BotStatus, RiskDecision, RunStatus
+from tradingbot.enums import BotStatus, RiskDecision, RunStatus, TradingMode
 from tradingbot.models import AgentRun, BotSettings, PortfolioSnapshot, PositionRecord, RiskEvent, TradeCandidate, WatchlistSymbol
-from tradingbot.schemas.trading import BacktestRequest
-from tradingbot.services.adapters import AlpacaBrokerAdapter, AlpacaMarketDataAdapter, AlpacaNewsAdapter
-from tradingbot.services.agents import OpenAIAgentRunner
+from tradingbot.schemas.trading import BacktestRequest, RiskCheckResult
+from tradingbot.services.adapters import build_broker_adapter, build_market_data_adapter, build_news_adapter
+from tradingbot.services.agents import AgentRunner
 from tradingbot.services.backtest import BacktestService
 from tradingbot.services.committee import CommitteeService
 from tradingbot.services.execution import ExecutionService
@@ -19,7 +19,7 @@ from tradingbot.services.indicators import bar_summary
 from tradingbot.services.risk import RiskEngine, RiskPolicy
 from tradingbot.services.store import (
     ensure_bot_settings,
-    execution_block_reason,
+    resolve_execution_support,
     serialize_trading_profile,
     strategy_profile_completed,
 )
@@ -63,10 +63,25 @@ def run_market_scan() -> dict[str, int]:
             session.commit()
             return {"queued": 0}
 
-        broker = AlpacaBrokerAdapter(settings_row.mode)
-        market_data = AlpacaMarketDataAdapter()
-        news_data = AlpacaNewsAdapter()
-        agent_runner = OpenAIAgentRunner(settings_row.openai_model)
+        execution_support = resolve_execution_support(settings_row)
+        if settings_row.mode == TradingMode.LIVE and not execution_support.live_start_allowed:
+            session.add(
+                RiskEvent(
+                    symbol=None,
+                    severity="critical",
+                    code="live_scope_unsupported",
+                    message=execution_support.analysis_only_downgrade_reason
+                    or "Live mode is blocked for the selected broker/profile combination.",
+                    payload={},
+                )
+            )
+            session.commit()
+            return {"queued": 0}
+
+        broker = build_broker_adapter(settings_row)
+        market_data = build_market_data_adapter(settings_row)
+        news_data = build_news_adapter(settings_row)
+        agent_runner = AgentRunner(settings_row.openai_model)
         committee = CommitteeService(settings_row.consensus_threshold, settings.min_approval_votes)
         risk_engine = _build_risk_engine(settings_row)
         execution = ExecutionService(session, broker)
@@ -89,7 +104,7 @@ def run_market_scan() -> dict[str, int]:
         start = end - timedelta(minutes=settings_row.scan_interval_minutes * 40)
         queued = 0
         trading_profile = serialize_trading_profile(settings_row)
-        executor_block_reason = execution_block_reason(settings_row)
+        executor_block_reason = execution_support.analysis_only_downgrade_reason
 
         for item in watchlist:
             run = AgentRun(symbol=item.symbol, status=RunStatus.RUNNING, started_at=end)
@@ -110,22 +125,21 @@ def run_market_scan() -> dict[str, int]:
                 market_decision = agent_runner.market_agent(item.symbol, indicators, trading_profile)
                 news_decision = agent_runner.news_agent(item.symbol, news, trading_profile)
                 proposal = committee.propose(market_decision, news_decision)
-                risk_result = risk_engine.validate(
-                    proposal,
-                    equity=account.equity,
-                    buying_power=account.buying_power,
-                    open_positions=open_positions,
-                    daily_loss_pct=max((-account.daily_pl / max(account.equity, 1)), 0),
-                    active_symbol_exposure=execution.current_symbol_exposure(item.symbol),
-                    is_symbol_in_cooldown=False,
-                )
-                if executor_block_reason and risk_result.decision.value == "approved":
-                    risk_result = risk_result.model_copy(
-                        update={
-                            "decision": RiskDecision.REJECTED,
-                            "approved_quantity": 0,
-                            "notes": [executor_block_reason, *risk_result.notes],
-                        }
+                if execution_support.supported_for_execution is None:
+                    risk_result = RiskCheckResult(
+                        decision=RiskDecision.REJECTED,
+                        approved_quantity=0,
+                        notes=[executor_block_reason] if executor_block_reason else [],
+                    )
+                else:
+                    risk_result = risk_engine.validate(
+                        proposal,
+                        equity=account.equity,
+                        buying_power=account.buying_power,
+                        open_positions=open_positions,
+                        daily_loss_pct=max((-account.daily_pl / max(account.equity, 1)), 0),
+                        active_symbol_exposure=execution.current_symbol_exposure(item.symbol),
+                        is_symbol_in_cooldown=False,
                     )
                 decision = committee.finalize(proposal, risk_result=risk_result)
 
@@ -150,7 +164,13 @@ def run_market_scan() -> dict[str, int]:
                 session.commit()
 
                 if decision.status.value == "approved":
-                    execution.submit_trade(mode=settings_row.mode, decision=decision, risk_result=risk_result)
+                    execution.submit_trade(
+                        mode=settings_row.mode,
+                        decision=decision,
+                        risk_result=risk_result,
+                        execution_allowed=execution_support.supported_for_execution is not None,
+                        block_reason=executor_block_reason,
+                    )
                     open_positions += 1
                     queued += 1
                 else:
@@ -190,9 +210,9 @@ def run_backtest(payload: dict) -> dict[str, int]:
     session = SessionLocal()
     try:
         settings_row = ensure_bot_settings(session)
-        market_data = AlpacaMarketDataAdapter()
-        news_data = AlpacaNewsAdapter()
-        agent_runner = OpenAIAgentRunner(settings_row.openai_model)
+        market_data = build_market_data_adapter(settings_row)
+        news_data = build_news_adapter(settings_row)
+        agent_runner = AgentRunner(settings_row.openai_model)
         committee = CommitteeService(settings_row.consensus_threshold, get_settings().min_approval_votes)
         risk_engine = _build_risk_engine(settings_row)
         service = BacktestService(market_data, news_data, agent_runner, committee, risk_engine)

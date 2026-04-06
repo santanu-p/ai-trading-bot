@@ -20,18 +20,21 @@ import {
 import type {
   BotSettingsResponse,
   BotSettingsUpdatePayload,
+  BrokerSettings,
   CommitteeDecision,
-  TradingProfile,
   OrderResponse,
   PositionResponse,
   RiskEventResponse,
-  RunResponse
+  RunResponse,
+  TradingProfile
 } from "@/lib/contracts";
 import { AgentIntake } from "@/components/agent-intake";
 import { currency, percent, timestamp } from "@/lib/format";
 import {
+  brokerOptions,
   executionSupportCopy,
   instrumentOptions,
+  marketUniverseOptions,
   optionLabel,
   riskProfileOptions,
   strategyFamilyOptions,
@@ -63,8 +66,40 @@ function buildSettingsPayload(draft: BotSettingsResponse): BotSettingsUpdatePayl
     symbol_cooldown_minutes: draft.symbol_cooldown_minutes,
     openai_model: draft.openai_model,
     watchlist: draft.watchlist,
-    trading_profile: draft.trading_profile
+    broker_settings: draft.broker_settings,
+    selected_for_analysis: draft.selected_for_analysis
   };
+}
+
+function renderProfileScope(profile: TradingProfile | null | undefined) {
+  if (!profile) {
+    return <p className="muted">No execution profile is currently supported for the selected broker scope.</p>;
+  }
+
+  return (
+    <div className="profile-summary-grid">
+      <div className="summary-pill">
+        <span>Pattern</span>
+        <strong>{optionLabel(tradingPatternOptions, profile.trading_pattern)}</strong>
+      </div>
+      <div className="summary-pill">
+        <span>Instrument</span>
+        <strong>{optionLabel(instrumentOptions, profile.instrument_class)}</strong>
+      </div>
+      <div className="summary-pill">
+        <span>Strategy</span>
+        <strong>{optionLabel(strategyFamilyOptions, profile.strategy_family)}</strong>
+      </div>
+      <div className="summary-pill">
+        <span>Risk</span>
+        <strong>{optionLabel(riskProfileOptions, profile.risk_profile)}</strong>
+      </div>
+      <div className="summary-pill">
+        <span>Universe</span>
+        <strong>{optionLabel(marketUniverseOptions, profile.market_universe)}</strong>
+      </div>
+    </div>
+  );
 }
 
 export function DashboardScreen({ section }: Props) {
@@ -218,8 +253,22 @@ export function DashboardScreen({ section }: Props) {
       current
         ? {
             ...current,
-            trading_profile: {
-              ...current.trading_profile,
+            selected_for_analysis: {
+              ...current.selected_for_analysis,
+              [key]: value
+            }
+          }
+        : current
+    );
+  }
+
+  function updateBrokerSettings<K extends keyof BrokerSettings>(key: K, value: BrokerSettings[K]) {
+    setSettingsDraft((current) =>
+      current
+        ? {
+            ...current,
+            broker_settings: {
+              ...current.broker_settings,
               [key]: value
             }
           }
@@ -272,12 +321,24 @@ export function DashboardScreen({ section }: Props) {
   const approvedDecisions = decisions.filter((decision) => decision.status === "approved").length;
   const intakeRequired = Boolean(settingsData && !settingsData.strategy_profile_completed);
   const supportState = settingsData ? executionSupportCopy[settingsData.execution_support_status] : null;
+  const liveStartBlocked = Boolean(settingsData?.mode === "live" && !settingsData.live_start_allowed);
+  const switchingToLive = settingsData?.mode === "paper";
   const selectedPattern = settingsData
-    ? optionLabel(tradingPatternOptions, settingsData.trading_profile.trading_pattern)
+    ? optionLabel(tradingPatternOptions, settingsData.selected_for_analysis.trading_pattern)
     : "Not selected";
   const selectedInstrument = settingsData
-    ? optionLabel(instrumentOptions, settingsData.trading_profile.instrument_class)
+    ? optionLabel(instrumentOptions, settingsData.selected_for_analysis.instrument_class)
     : "Not selected";
+  const selectedBroker = settingsData
+    ? optionLabel(brokerOptions, settingsData.broker_settings.broker)
+    : "Not selected";
+  const startButtonLabel = intakeRequired
+    ? "Complete intake first"
+    : liveStartBlocked
+      ? "Live start blocked"
+      : settingsData?.execution_support_status === "analysis_only_for_selected_broker"
+        ? "Start analysis mode"
+        : "Start bot";
 
   return (
     <div className="workspace-shell">
@@ -296,6 +357,10 @@ export function DashboardScreen({ section }: Props) {
             <strong>{settingsData?.status ?? "loading"}</strong>
           </div>
           <div className="status-pill">
+            <span>Broker</span>
+            <strong>{selectedBroker}</strong>
+          </div>
+          <div className="status-pill">
             <span>Pattern</span>
             <strong>{selectedPattern}</strong>
           </div>
@@ -312,22 +377,22 @@ export function DashboardScreen({ section }: Props) {
         <div className="command-stack">
           <button
             className="primary-button"
-            disabled={busy || intakeRequired}
+            disabled={busy || intakeRequired || liveStartBlocked}
             onClick={() => handleCommand(() => startBot(token))}
           >
-            {intakeRequired ? "Complete intake first" : "Start bot"}
+            {startButtonLabel}
           </button>
           <button className="secondary-button" disabled={busy} onClick={() => handleCommand(() => stopBot(token))}>
             Stop bot
           </button>
           <button
             className="ghost-button"
-            disabled={busy || !settingsData || intakeRequired}
+            disabled={busy || !settingsData || intakeRequired || Boolean(switchingToLive && !settingsData.live_start_allowed)}
             onClick={() =>
               handleCommand(() => switchMode(token, settingsData?.mode === "paper" ? "live" : "paper"))
             }
           >
-            Flip mode
+            {switchingToLive && !settingsData?.live_start_allowed ? "Live mode blocked" : "Flip mode"}
           </button>
           <button
             className="ghost-button"
@@ -380,6 +445,7 @@ export function DashboardScreen({ section }: Props) {
           >
             <strong>{supportState.title}</strong>
             <p>{supportState.description}</p>
+            {settingsData?.analysis_only_downgrade_reason ? <p>{settingsData.analysis_only_downgrade_reason}</p> : null}
           </section>
         ) : null}
 
@@ -406,10 +472,13 @@ export function DashboardScreen({ section }: Props) {
 
         {intakeRequired && settingsDraft ? (
           <AgentIntake
-            profile={settingsDraft.trading_profile}
+            profile={settingsDraft.selected_for_analysis}
+            brokerSettings={settingsDraft.broker_settings}
+            brokerCapabilityMatrix={settingsDraft.broker_capability_matrix}
             onChange={updateTradingProfile}
+            onBrokerChange={updateBrokerSettings}
             title="First question set for the AI agents"
-            description="Choose the trading pattern and market style first. After this is saved, the agents will use those instructions before generating setups or performing tasks."
+            description="Choose the broker scope and trading profile first. After this is saved, the agents will use those instructions before generating setups or performing tasks."
           />
         ) : null}
 
@@ -423,30 +492,77 @@ export function DashboardScreen({ section }: Props) {
           <div className="dashboard-grid">
             <section className="panel">
               <div className="panel-heading">
-                <h3>Selected trading brief</h3>
-                <p>The current intake profile guiding the agents.</p>
+                <h3>Analysis vs execution scope</h3>
+                <p>The selected research brief is stored separately from what the current broker can actually execute.</p>
+              </div>
+              <div className="scope-grid">
+                <article className="scope-card">
+                  <h4>Selected for analysis</h4>
+                  {renderProfileScope(settingsData?.selected_for_analysis)}
+                </article>
+                <article className="scope-card">
+                  <h4>Supported for execution</h4>
+                  {renderProfileScope(settingsData?.supported_for_execution)}
+                </article>
+              </div>
+              {settingsData?.selected_for_analysis.profile_notes ? (
+                <p className="note-row">{settingsData.selected_for_analysis.profile_notes}</p>
+              ) : null}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Broker coverage</h3>
+                <p>Configured broker metadata and the capability registry that gates live execution.</p>
               </div>
               <div className="profile-summary-grid">
                 <div className="summary-pill">
-                  <span>Pattern</span>
-                  <strong>{selectedPattern}</strong>
+                  <span>Broker</span>
+                  <strong>{selectedBroker}</strong>
                 </div>
                 <div className="summary-pill">
-                  <span>Instrument</span>
-                  <strong>{selectedInstrument}</strong>
+                  <span>Account type</span>
+                  <strong>{settingsData?.broker_settings.account_type}</strong>
                 </div>
                 <div className="summary-pill">
-                  <span>Strategy</span>
-                  <strong>{optionLabel(strategyFamilyOptions, settingsData?.trading_profile.strategy_family)}</strong>
+                  <span>Venue</span>
+                  <strong>{settingsData?.broker_settings.venue}</strong>
                 </div>
                 <div className="summary-pill">
-                  <span>Risk</span>
-                  <strong>{optionLabel(riskProfileOptions, settingsData?.trading_profile.risk_profile)}</strong>
+                  <span>Timezone</span>
+                  <strong>{settingsData?.broker_settings.timezone}</strong>
+                </div>
+                <div className="summary-pill">
+                  <span>Base currency</span>
+                  <strong>{settingsData?.broker_settings.base_currency}</strong>
                 </div>
               </div>
-              {settingsData?.trading_profile.profile_notes ? (
-                <p className="note-row">{settingsData.trading_profile.profile_notes}</p>
-              ) : null}
+              <p className="muted broker-permissions">
+                Permissions: {settingsData?.broker_settings.permissions.join(", ") || "None configured"}
+              </p>
+              <table className="data-table capability-table">
+                <thead>
+                  <tr>
+                    <th>Capability</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {settingsData?.broker_capability_matrix.map((capability) => (
+                    <tr key={capability.key}>
+                      <td className="capability-cell">
+                        <strong>{capability.label}</strong>
+                        <span>{capability.description}</span>
+                      </td>
+                      <td>
+                        <span className={capability.supported ? "tag-positive" : "tag-negative"}>
+                          {capability.supported ? "Supported" : "Not supported"}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </section>
 
             <section className="panel">
@@ -644,10 +760,13 @@ export function DashboardScreen({ section }: Props) {
               <p>Consensus, risk budgets, cadence, watchlist symbols, and the saved agent intake.</p>
             </div>
             <AgentIntake
-              profile={settingsDraft.trading_profile}
+              profile={settingsDraft.selected_for_analysis}
+              brokerSettings={settingsDraft.broker_settings}
+              brokerCapabilityMatrix={settingsDraft.broker_capability_matrix}
               onChange={updateTradingProfile}
+              onBrokerChange={updateBrokerSettings}
               title="Trading pattern and strategy intake"
-              description="These answers are injected into the market and news agent prompts before they analyze the watchlist."
+              description="These broker and profile settings define both the research brief and the subset that can be executed."
             />
             <div className="settings-grid">
               <label>

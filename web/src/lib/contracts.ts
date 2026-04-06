@@ -2,6 +2,7 @@ export type TradingMode = "paper" | "live";
 export type BotStatus = "running" | "stopped";
 export type RiskDecision = "approved" | "rejected";
 export type OrderIntent = "buy" | "sell" | "hold";
+export type BrokerSlug = "alpaca";
 export type TradingPattern =
   | "scalping"
   | "intraday"
@@ -27,8 +28,7 @@ export type RiskProfile = "conservative" | "balanced" | "aggressive";
 export type MarketUniverse = "large_cap" | "large_mid_cap" | "index_only" | "sector_focus" | "custom_watchlist";
 export type ExecutionSupportStatus =
   | "complete_agent_intake_first"
-  | "analysis_only_for_selected_instrument"
-  | "analysis_only_for_selected_pattern"
+  | "analysis_only_for_selected_broker"
   | "broker_execution_supported";
 
 export interface TradingProfile {
@@ -38,6 +38,22 @@ export interface TradingProfile {
   risk_profile: RiskProfile | null;
   market_universe: MarketUniverse | null;
   profile_notes: string;
+}
+
+export interface BrokerSettings {
+  broker: BrokerSlug;
+  account_type: string;
+  venue: string;
+  timezone: string;
+  base_currency: string;
+  permissions: string[];
+}
+
+export interface BrokerCapability {
+  key: string;
+  label: string;
+  description: string;
+  supported: boolean;
 }
 
 export interface BotSettingsResponse {
@@ -53,9 +69,14 @@ export interface BotSettingsResponse {
   symbol_cooldown_minutes: number;
   openai_model: string;
   watchlist: string[];
-  trading_profile: TradingProfile;
+  broker_settings: BrokerSettings;
+  broker_capability_matrix: BrokerCapability[];
+  selected_for_analysis: TradingProfile;
+  supported_for_execution: TradingProfile | null;
   strategy_profile_completed: boolean;
   execution_support_status: ExecutionSupportStatus;
+  live_start_allowed: boolean;
+  analysis_only_downgrade_reason?: string | null;
 }
 
 export interface BotSettingsUpdatePayload {
@@ -68,7 +89,8 @@ export interface BotSettingsUpdatePayload {
   symbol_cooldown_minutes: number;
   openai_model: string;
   watchlist: string[];
-  trading_profile: TradingProfile;
+  broker_settings: BrokerSettings;
+  selected_for_analysis: TradingProfile;
 }
 
 export interface CommitteeDecision {

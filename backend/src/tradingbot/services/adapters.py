@@ -3,13 +3,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from tradingbot.config import get_settings
-from tradingbot.enums import TradingMode
+from tradingbot.enums import BrokerSlug, TradingMode
+
+if TYPE_CHECKING:
+    from tradingbot.models import BotSettings
 
 
 @dataclass(slots=True)
@@ -51,6 +54,8 @@ class OrderSubmission:
 
 
 class BrokerAdapter(Protocol):
+    broker_slug: BrokerSlug
+
     def get_account(self) -> AccountSnapshot:
         ...
 
@@ -116,6 +121,7 @@ class AlpacaRESTMixin:
 class AlpacaBrokerAdapter(AlpacaRESTMixin):
     def __init__(self, mode: TradingMode) -> None:
         super().__init__()
+        self.broker_slug = BrokerSlug.ALPACA
         self.mode = mode
         self.base_url = (
             self.settings.alpaca_paper_base_url
@@ -200,3 +206,21 @@ class AlpacaNewsAdapter(AlpacaRESTMixin):
             )
             for item in items
         ]
+
+
+def build_broker_adapter(settings_row: BotSettings) -> BrokerAdapter:
+    if settings_row.broker_slug == BrokerSlug.ALPACA:
+        return AlpacaBrokerAdapter(settings_row.mode)
+    raise RuntimeError(f"Unsupported broker adapter: {settings_row.broker_slug.value}")
+
+
+def build_market_data_adapter(settings_row: BotSettings) -> MarketDataAdapter:
+    if settings_row.broker_slug == BrokerSlug.ALPACA:
+        return AlpacaMarketDataAdapter()
+    raise RuntimeError(f"Unsupported market-data adapter: {settings_row.broker_slug.value}")
+
+
+def build_news_adapter(settings_row: BotSettings) -> NewsAdapter:
+    if settings_row.broker_slug == BrokerSlug.ALPACA:
+        return AlpacaNewsAdapter()
+    raise RuntimeError(f"Unsupported news adapter: {settings_row.broker_slug.value}")

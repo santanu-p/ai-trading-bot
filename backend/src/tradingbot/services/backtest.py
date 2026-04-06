@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 
 from tradingbot.schemas.settings import TradingProfile
 from tradingbot.services.adapters import MarketDataAdapter, NewsAdapter
-from tradingbot.services.agents import OpenAIAgentRunner
+from tradingbot.services.agents import AgentRunner
 from tradingbot.services.committee import CommitteeService
 from tradingbot.services.indicators import bar_summary
 from tradingbot.services.risk import RiskEngine
@@ -24,7 +24,7 @@ class BacktestService:
         self,
         market_data: MarketDataAdapter,
         news_data: NewsAdapter,
-        agent_runner: OpenAIAgentRunner,
+        agent_runner: AgentRunner,
         committee_service: CommitteeService,
         risk_engine: RiskEngine,
     ) -> None:

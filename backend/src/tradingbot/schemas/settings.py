@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 
 from tradingbot.enums import (
     BotStatus,
+    BrokerSlug,
     InstrumentClass,
     MarketUniverse,
     RiskProfile,
@@ -22,6 +23,22 @@ class TradingProfile(BaseModel):
     profile_notes: str = ""
 
 
+class BrokerSettings(BaseModel):
+    broker: BrokerSlug = BrokerSlug.ALPACA
+    account_type: str = Field(default="cash", min_length=1, max_length=40)
+    venue: str = Field(default="US equities", min_length=1, max_length=80)
+    timezone: str = Field(default="America/New_York", min_length=1, max_length=80)
+    base_currency: str = Field(default="USD", min_length=1, max_length=12)
+    permissions: list[str] = Field(default_factory=list)
+
+
+class BrokerCapability(BaseModel):
+    key: str
+    label: str
+    description: str
+    supported: bool
+
+
 class BotSettingsResponse(BaseModel):
     status: BotStatus
     mode: TradingMode
@@ -35,9 +52,14 @@ class BotSettingsResponse(BaseModel):
     symbol_cooldown_minutes: int
     openai_model: str
     watchlist: list[str]
-    trading_profile: TradingProfile
+    broker_settings: BrokerSettings
+    broker_capability_matrix: list[BrokerCapability]
+    selected_for_analysis: TradingProfile
+    supported_for_execution: TradingProfile | None
     strategy_profile_completed: bool
     execution_support_status: str
+    live_start_allowed: bool
+    analysis_only_downgrade_reason: str | None
 
 
 class BotSettingsUpdate(BaseModel):
@@ -50,7 +72,8 @@ class BotSettingsUpdate(BaseModel):
     symbol_cooldown_minutes: int = Field(default=45, ge=0, le=480)
     openai_model: str = Field(default="gpt-5-mini", min_length=1)
     watchlist: list[str] = Field(default_factory=list)
-    trading_profile: TradingProfile = Field(default_factory=TradingProfile)
+    broker_settings: BrokerSettings = Field(default_factory=BrokerSettings)
+    selected_for_analysis: TradingProfile = Field(default_factory=TradingProfile)
 
 
 class BotModeUpdate(BaseModel):

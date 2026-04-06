@@ -2,7 +2,7 @@
 
 A greenfield multi-agent intraday trading bot scaffold for Alpaca equities with:
 
-- `backend/`: FastAPI API, SQLAlchemy models, Celery worker entrypoints, risk/execution services, and Alpaca/OpenAI integrations
+- `backend/`: FastAPI API, SQLAlchemy models, Celery worker entrypoints, risk/execution services, and Alpaca/OpenAI/Gemini integrations
 - `web/`: Next.js operator dashboard for bot control, decisions, orders, positions, risk, and settings
 - `contracts/`: shared JSON schema for committee decisions
 - `docs/`: architecture, API, setup, and deployment documentation

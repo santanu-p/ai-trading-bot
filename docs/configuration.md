@@ -27,6 +27,11 @@ Use either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`. The code will prefer the h
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
 
+### Gemini
+
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`
+
 ### Alpaca
 
 - `ALPACA_API_KEY`
@@ -55,4 +60,3 @@ Current code defaults include:
 
 - The environment controls infrastructure and external providers.
 - The database-backed bot settings control operator-tuned behavior such as watchlists and risk thresholds.
-

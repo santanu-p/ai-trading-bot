@@ -1,33 +1,20 @@
 from __future__ import annotations
 
-import json
-from typing import Any
-
-from openai import OpenAI
-
-from tradingbot.config import get_settings
 from tradingbot.enums import AgentRole
 from tradingbot.schemas.settings import TradingProfile
 from tradingbot.schemas.trading import AgentDecision
 from tradingbot.services.adapters import NewsItem
+from tradingbot.services.llm_clients import build_llm_client
 
 
-class OpenAIAgentRunner:
+class AgentRunner:
     def __init__(self, model: str | None = None) -> None:
-        settings = get_settings()
-        if not settings.openai_api_key:
-            raise RuntimeError("OPENAI_API_KEY must be configured.")
-        self.client = OpenAI(api_key=settings.openai_api_key)
-        self.model = model or settings.openai_model
+        self.client = build_llm_client(model)
 
-    def _run_json_prompt(self, system_prompt: str, prompt_payload: dict[str, Any]) -> AgentDecision:
-        prompt = json.dumps(prompt_payload, indent=2)
-        response = self.client.responses.create(
-            model=self.model,
-            instructions=system_prompt,
-            input=prompt,
+    def _run_json_prompt(self, system_prompt: str, prompt_payload: dict[str, object]) -> AgentDecision:
+        return AgentDecision.model_validate_json(
+            self.client.complete_json(system_prompt=system_prompt, prompt_payload=prompt_payload)
         )
-        return AgentDecision.model_validate_json(response.output_text)
 
     def market_agent(self, symbol: str, indicators: dict[str, float], trading_profile: TradingProfile) -> AgentDecision:
         system_prompt = (

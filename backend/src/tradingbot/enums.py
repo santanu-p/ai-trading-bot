@@ -8,6 +8,10 @@ class TradingMode(str, Enum):
     LIVE = "live"
 
 
+class BrokerSlug(str, Enum):
+    ALPACA = "alpaca"
+
+
 class BotStatus(str, Enum):
     RUNNING = "running"
     STOPPED = "stopped"

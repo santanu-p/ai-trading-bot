@@ -180,6 +180,7 @@ textarea {
 .header-actions,
 .settings-grid,
 .profile-summary-grid,
+.scope-grid,
 .decision-meta,
 .decision-values,
 .risk-meta {
@@ -257,6 +258,24 @@ textarea {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
+}
+
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.scope-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 252, 247, 0.56);
+  padding: 16px;
+}
+
+.scope-card h4 {
+  margin: 0 0 12px;
+  font-family: var(--font-display), sans-serif;
 }
 
 .summary-pill {
@@ -395,6 +414,25 @@ textarea {
   font-size: 12px;
 }
 
+.broker-grid {
+  margin-bottom: 18px;
+}
+
+.broker-permissions {
+  margin: 12px 0 16px;
+}
+
+.capability-cell strong,
+.capability-cell span {
+  display: block;
+}
+
+.capability-cell span {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
 .settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -441,7 +479,8 @@ textarea {
   }
 
   .choice-grid,
-  .profile-summary-grid {
+  .profile-summary-grid,
+  .scope-grid {
     grid-template-columns: 1fr;
   }
 }

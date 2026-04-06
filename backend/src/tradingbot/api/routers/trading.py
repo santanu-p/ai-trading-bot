@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tradingbot.api.dependencies import db_session_dependency, get_current_operator
-from tradingbot.enums import BotStatus
+from tradingbot.enums import BotStatus, TradingMode
 from tradingbot.models import AgentRun, AuditLog, BotSettings, OrderRecord, PositionRecord, RiskEvent, TradeCandidate
 from tradingbot.schemas.settings import BotModeUpdate, BotStatusResponse
 from tradingbot.schemas.trading import (
@@ -17,7 +17,7 @@ from tradingbot.schemas.trading import (
     RiskEventResponse,
     RunResponse,
 )
-from tradingbot.services.store import ensure_bot_settings, strategy_profile_completed
+from tradingbot.services.store import ensure_bot_settings, resolve_execution_support, strategy_profile_completed
 from tradingbot.worker.tasks import enqueue_backtest
 
 router = APIRouter(tags=["trading"])
@@ -39,6 +39,13 @@ def start_bot(
     settings_row = ensure_bot_settings(session)
     if not strategy_profile_completed(settings_row):
         raise HTTPException(status_code=400, detail="Complete the trading-pattern intake before starting the bot.")
+    support = resolve_execution_support(settings_row)
+    if settings_row.mode == TradingMode.LIVE and not support.live_start_allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=support.analysis_only_downgrade_reason
+            or "The selected broker/profile combination cannot be started in live mode.",
+        )
     settings_row.status = BotStatus.RUNNING
     session.add(AuditLog(action="bot.start", actor=operator, details={}))
     session.commit()
@@ -64,6 +71,14 @@ def update_mode(
     session: Session = Depends(db_session_dependency),
 ) -> BotStatusResponse:
     settings_row = ensure_bot_settings(session)
+    if payload.mode == TradingMode.LIVE:
+        support = resolve_execution_support(settings_row)
+        if not support.live_start_allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=support.analysis_only_downgrade_reason
+                or "The selected broker/profile combination cannot be switched to live mode.",
+            )
     settings_row.mode = payload.mode
     session.add(AuditLog(action="bot.mode", actor=operator, details={"mode": payload.mode.value}))
     session.commit()

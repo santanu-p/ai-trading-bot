@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from tradingbot.db import Base
 from tradingbot.enums import (
     BotStatus,
+    BrokerSlug,
     InstrumentClass,
     MarketUniverse,
     OrderIntent,
@@ -48,12 +49,19 @@ class BotSettings(Base, TimestampMixin):
     max_symbol_notional_pct: Mapped[float] = mapped_column(Float, default=0.16)
     symbol_cooldown_minutes: Mapped[int] = mapped_column(Integer, default=45)
     openai_model: Mapped[str] = mapped_column(String(100), default="gpt-5-mini")
+    broker_slug: Mapped[BrokerSlug] = mapped_column(Enum(BrokerSlug), default=BrokerSlug.ALPACA)
+    broker_account_type: Mapped[str] = mapped_column(String(40), default="cash")
+    broker_venue: Mapped[str] = mapped_column(String(80), default="US equities")
+    broker_timezone: Mapped[str] = mapped_column(String(80), default="America/New_York")
+    broker_base_currency: Mapped[str] = mapped_column(String(12), default="USD")
+    broker_permissions: Mapped[list[str]] = mapped_column(JSON, default=list)
     trading_pattern: Mapped[TradingPattern | None] = mapped_column(Enum(TradingPattern), nullable=True)
     instrument_class: Mapped[InstrumentClass | None] = mapped_column(Enum(InstrumentClass), nullable=True)
     strategy_family: Mapped[StrategyFamily | None] = mapped_column(Enum(StrategyFamily), nullable=True)
     risk_profile: Mapped[RiskProfile | None] = mapped_column(Enum(RiskProfile), nullable=True)
     market_universe: Mapped[MarketUniverse | None] = mapped_column(Enum(MarketUniverse), nullable=True)
     profile_notes: Mapped[str] = mapped_column(Text, default="")
+    analysis_only_downgrade_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class WatchlistSymbol(Base, TimestampMixin):

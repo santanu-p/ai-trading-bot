@@ -23,7 +23,22 @@ class ExecutionService:
         mode: TradingMode,
         decision: CommitteeDecision,
         risk_result: RiskCheckResult,
+        execution_allowed: bool = True,
+        block_reason: str | None = None,
     ) -> OrderRecord | None:
+        if not execution_allowed:
+            self.session.add(
+                RiskEvent(
+                    symbol=decision.symbol,
+                    severity="warning",
+                    code="analysis_only_profile",
+                    message=block_reason or "The selected broker/profile combination is analysis-only.",
+                    payload={},
+                )
+            )
+            self.session.commit()
+            return None
+
         if risk_result.decision.value != "approved":
             self.session.add(
                 RiskEvent(
@@ -86,4 +101,3 @@ class ExecutionService:
     def current_symbol_exposure(self, symbol: str) -> float:
         position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == symbol))
         return position.market_value if position else 0.0
-

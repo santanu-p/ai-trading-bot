@@ -5,7 +5,19 @@ from sqlalchemy.orm import Session
 
 from tradingbot.config import get_settings
 from tradingbot.models import AuditLog, BotSettings, WatchlistSymbol
-from tradingbot.schemas.settings import BotSettingsResponse, BotSettingsUpdate, TradingProfile
+from tradingbot.schemas.settings import (
+    BotSettingsResponse,
+    BotSettingsUpdate,
+    BrokerCapability,
+    BrokerSettings,
+    TradingProfile,
+)
+from tradingbot.services.broker_capabilities import (
+    ExecutionSupportSummary,
+    get_broker_definition,
+    normalize_permissions,
+    resolve_execution_support as resolve_profile_execution_support,
+)
 
 
 def ensure_bot_settings(session: Session) -> BotSettings:
@@ -14,11 +26,18 @@ def ensure_bot_settings(session: Session) -> BotSettings:
         return settings_row
 
     defaults = get_settings()
+    broker_definition = get_broker_definition(BrokerSettings().broker)
     settings_row = BotSettings(
         id=1,
         scan_interval_minutes=defaults.scan_interval_minutes,
         consensus_threshold=defaults.consensus_threshold,
         openai_model=defaults.openai_model,
+        broker_slug=broker_definition.slug,
+        broker_account_type=broker_definition.default_account_type,
+        broker_venue=broker_definition.default_venue,
+        broker_timezone=broker_definition.default_timezone,
+        broker_base_currency=broker_definition.default_base_currency,
+        broker_permissions=list(broker_definition.default_permissions),
     )
     session.add(settings_row)
     session.commit()
@@ -36,7 +55,7 @@ def replace_watchlist(session: Session, symbols: list[str]) -> list[WatchlistSym
     return rows
 
 
-def serialize_trading_profile(settings_row: BotSettings) -> TradingProfile:
+def serialize_selected_for_analysis(settings_row: BotSettings) -> TradingProfile:
     return TradingProfile(
         trading_pattern=settings_row.trading_pattern,
         instrument_class=settings_row.instrument_class,
@@ -44,6 +63,22 @@ def serialize_trading_profile(settings_row: BotSettings) -> TradingProfile:
         risk_profile=settings_row.risk_profile,
         market_universe=settings_row.market_universe,
         profile_notes=settings_row.profile_notes or "",
+    )
+
+
+def serialize_trading_profile(settings_row: BotSettings) -> TradingProfile:
+    return serialize_selected_for_analysis(settings_row)
+
+
+def serialize_broker_settings(settings_row: BotSettings) -> BrokerSettings:
+    broker_definition = get_broker_definition(settings_row.broker_slug)
+    return BrokerSettings(
+        broker=settings_row.broker_slug,
+        account_type=settings_row.broker_account_type or broker_definition.default_account_type,
+        venue=settings_row.broker_venue or broker_definition.default_venue,
+        timezone=settings_row.broker_timezone or broker_definition.default_timezone,
+        base_currency=settings_row.broker_base_currency or broker_definition.default_base_currency,
+        permissions=normalize_permissions(settings_row.broker_permissions, broker_definition),
     )
 
 
@@ -59,36 +94,28 @@ def strategy_profile_completed(settings_row: BotSettings) -> bool:
     )
 
 
+def resolve_execution_support(settings_row: BotSettings) -> ExecutionSupportSummary:
+    broker_definition = get_broker_definition(settings_row.broker_slug)
+    return resolve_profile_execution_support(serialize_selected_for_analysis(settings_row), broker_definition)
+
+
 def execution_support_status(settings_row: BotSettings) -> str:
-    if not strategy_profile_completed(settings_row):
-        return "complete_agent_intake_first"
-    if settings_row.instrument_class.value != "cash_equity":
-        return "analysis_only_for_selected_instrument"
-    if settings_row.trading_pattern.value in {
-        "futures_directional",
-        "futures_hedged",
-        "options_buying",
-        "options_selling",
-    }:
-        return "analysis_only_for_selected_pattern"
-    return "broker_execution_supported"
+    return resolve_execution_support(settings_row).status
 
 
 def execution_block_reason(settings_row: BotSettings) -> str | None:
-    status = execution_support_status(settings_row)
-    if status == "complete_agent_intake_first":
+    support = resolve_execution_support(settings_row)
+    if support.status == "complete_agent_intake_first":
         return "Complete the trading pattern intake before the agents can act."
-    if status == "analysis_only_for_selected_instrument":
-        return "The current Alpaca execution adapter only supports cash-equity execution; selected instruments will run in analysis mode."
-    if status == "analysis_only_for_selected_pattern":
-        return "The selected trading pattern is captured for agent analysis, but the current executor cannot place those orders yet."
-    return None
+    return support.analysis_only_downgrade_reason
 
 
 def serialize_settings(session: Session, settings_row: BotSettings) -> BotSettingsResponse:
     watchlist = session.scalars(
         select(WatchlistSymbol.symbol).where(WatchlistSymbol.enabled.is_(True)).order_by(WatchlistSymbol.symbol)
     ).all()
+    broker_definition = get_broker_definition(settings_row.broker_slug)
+    support = resolve_execution_support(settings_row)
     return BotSettingsResponse(
         status=settings_row.status,
         mode=settings_row.mode,
@@ -102,9 +129,23 @@ def serialize_settings(session: Session, settings_row: BotSettings) -> BotSettin
         symbol_cooldown_minutes=settings_row.symbol_cooldown_minutes,
         openai_model=settings_row.openai_model,
         watchlist=list(watchlist),
-        trading_profile=serialize_trading_profile(settings_row),
+        broker_settings=serialize_broker_settings(settings_row),
+        broker_capability_matrix=[
+            BrokerCapability(
+                key=item.key,
+                label=item.label,
+                description=item.description,
+                supported=item.supported,
+            )
+            for item in broker_definition.capabilities
+        ],
+        selected_for_analysis=support.selected_for_analysis,
+        supported_for_execution=support.supported_for_execution,
         strategy_profile_completed=strategy_profile_completed(settings_row),
-        execution_support_status=execution_support_status(settings_row),
+        execution_support_status=support.status,
+        live_start_allowed=support.live_start_allowed,
+        analysis_only_downgrade_reason=settings_row.analysis_only_downgrade_reason
+        or support.analysis_only_downgrade_reason,
     )
 
 
@@ -118,12 +159,20 @@ def apply_settings_update(session: Session, payload: BotSettingsUpdate) -> BotSe
     settings_row.max_symbol_notional_pct = payload.max_symbol_notional_pct
     settings_row.symbol_cooldown_minutes = payload.symbol_cooldown_minutes
     settings_row.openai_model = payload.openai_model
-    settings_row.trading_pattern = payload.trading_profile.trading_pattern
-    settings_row.instrument_class = payload.trading_profile.instrument_class
-    settings_row.strategy_family = payload.trading_profile.strategy_family
-    settings_row.risk_profile = payload.trading_profile.risk_profile
-    settings_row.market_universe = payload.trading_profile.market_universe
-    settings_row.profile_notes = payload.trading_profile.profile_notes.strip()
+    broker_definition = get_broker_definition(payload.broker_settings.broker)
+    settings_row.broker_slug = payload.broker_settings.broker
+    settings_row.broker_account_type = payload.broker_settings.account_type.strip()
+    settings_row.broker_venue = payload.broker_settings.venue.strip()
+    settings_row.broker_timezone = payload.broker_settings.timezone.strip()
+    settings_row.broker_base_currency = payload.broker_settings.base_currency.strip().upper()
+    settings_row.broker_permissions = normalize_permissions(payload.broker_settings.permissions, broker_definition)
+    settings_row.trading_pattern = payload.selected_for_analysis.trading_pattern
+    settings_row.instrument_class = payload.selected_for_analysis.instrument_class
+    settings_row.strategy_family = payload.selected_for_analysis.strategy_family
+    settings_row.risk_profile = payload.selected_for_analysis.risk_profile
+    settings_row.market_universe = payload.selected_for_analysis.market_universe
+    settings_row.profile_notes = payload.selected_for_analysis.profile_notes.strip()
+    settings_row.analysis_only_downgrade_reason = resolve_execution_support(settings_row).analysis_only_downgrade_reason
     replace_watchlist(session, payload.watchlist)
     session.add(
         AuditLog(
@@ -132,8 +181,13 @@ def apply_settings_update(session: Session, payload: BotSettingsUpdate) -> BotSe
             details={
                 "watchlist_size": len(payload.watchlist),
                 "openai_model": payload.openai_model,
-                "trading_pattern": payload.trading_profile.trading_pattern.value if payload.trading_profile.trading_pattern else None,
-                "instrument_class": payload.trading_profile.instrument_class.value if payload.trading_profile.instrument_class else None,
+                "broker": payload.broker_settings.broker.value,
+                "trading_pattern": payload.selected_for_analysis.trading_pattern.value
+                if payload.selected_for_analysis.trading_pattern
+                else None,
+                "instrument_class": payload.selected_for_analysis.instrument_class.value
+                if payload.selected_for_analysis.instrument_class
+                else None,
             },
         )
     )

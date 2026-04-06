@@ -1,4 +1,5 @@
 import type {
+  BrokerSlug,
   ExecutionSupportStatus,
   InstrumentClass,
   MarketUniverse,
@@ -15,13 +16,22 @@ export type ProfileOption<T extends string> = {
   supportedByCurrentExecutor?: boolean;
 };
 
+export const brokerOptions: ProfileOption<BrokerSlug>[] = [
+  {
+    value: "alpaca",
+    label: "Alpaca US Equities",
+    description: "Current v2 scope: US cash-equity research with same-session bracket-order execution only.",
+    supportedByCurrentExecutor: true
+  }
+];
+
 export const tradingPatternOptions: ProfileOption<TradingPattern>[] = [
   { value: "scalping", label: "Scalping", description: "Very short holding windows and tight entry confirmation.", supportedByCurrentExecutor: true },
   { value: "intraday", label: "Intraday", description: "Open and close trades within the same session.", supportedByCurrentExecutor: true },
-  { value: "delivery", label: "Delivery", description: "Cash-equity delivery style with longer holding intent.", supportedByCurrentExecutor: true },
-  { value: "swing", label: "Swing", description: "Multi-day trades driven by trend and continuation setups.", supportedByCurrentExecutor: true },
-  { value: "positional", label: "Positional", description: "Longer holding windows with broader trend alignment.", supportedByCurrentExecutor: true },
-  { value: "btst_stbt", label: "BTST / STBT", description: "Carry overnight with gap or continuation expectations.", supportedByCurrentExecutor: true },
+  { value: "delivery", label: "Delivery", description: "Cash-equity delivery style with longer holding intent.", supportedByCurrentExecutor: false },
+  { value: "swing", label: "Swing", description: "Multi-day trades driven by trend and continuation setups.", supportedByCurrentExecutor: false },
+  { value: "positional", label: "Positional", description: "Longer holding windows with broader trend alignment.", supportedByCurrentExecutor: false },
+  { value: "btst_stbt", label: "BTST / STBT", description: "Carry overnight with gap or continuation expectations.", supportedByCurrentExecutor: false },
   { value: "futures_directional", label: "Futures Directional", description: "Directional futures analysis and trade selection.", supportedByCurrentExecutor: false },
   { value: "futures_hedged", label: "Futures Hedged", description: "Hedged futures setups with spread or protection logic.", supportedByCurrentExecutor: false },
   { value: "options_buying", label: "Options Buying", description: "Directional options entries with premium paid.", supportedByCurrentExecutor: false },
@@ -69,19 +79,15 @@ export const executionSupportCopy: Record<
 > = {
   complete_agent_intake_first: {
     title: "Agent intake required",
-    description: "The agents will not run until you choose a trading pattern, instruments, strategy family, risk profile, and market universe."
+    description: "The agents will not run until you choose the broker scope, trading pattern, instruments, strategy family, risk profile, and market universe."
   },
-  analysis_only_for_selected_instrument: {
-    title: "Analysis-only instrument selection",
-    description: "The agents will adapt to your selected instrument class, but the current Alpaca executor only places cash-equity orders."
-  },
-  analysis_only_for_selected_pattern: {
-    title: "Analysis-only pattern selection",
-    description: "The agents will analyze the selected F&O pattern, but broker execution remains disabled for that pattern in the current build."
+  analysis_only_for_selected_broker: {
+    title: "Analysis-only broker scope",
+    description: "The selected research profile will still guide the agents, but the current broker configuration will not submit orders for it."
   },
   broker_execution_supported: {
     title: "Broker execution supported",
-    description: "The selected pattern maps to the current Alpaca cash-equity executor."
+    description: "The selected profile matches the current broker execution surface."
   }
 };
 
@@ -97,4 +103,3 @@ export const emptyTradingProfile: TradingProfile = {
   market_universe: null,
   profile_notes: ""
 };
-
