@@ -55,6 +55,42 @@ npm run dev
 docker compose up --build
 ```
 
+### GitHub Codespaces
+
+The repo now includes a `.devcontainer/` setup for Codespaces.
+
+After opening the repo in a Codespace:
+
+1. Wait for `postCreateCommand` to finish installing backend and web dependencies.
+2. Update `.env` with at least:
+   - `JWT_SECRET`
+   - `ADMIN_PASSWORD`
+   - `OPENAI_API_KEY` or `GEMINI_API_KEY`
+   - `ALPACA_API_KEY`
+   - `ALPACA_API_SECRET`
+3. Start the API:
+
+```bash
+cd backend
+uvicorn tradingbot.api.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+4. Start the worker:
+
+```bash
+cd backend
+celery -A tradingbot.worker.celery_app.celery_app worker -B --loglevel=INFO
+```
+
+5. Start the web app:
+
+```bash
+cd web
+npm run dev -- --hostname 0.0.0.0 --port 3000
+```
+
+The Codespace devcontainer already starts Postgres and Redis as sidecar services.
+
 ## First-Run Checklist
 
 - configure admin credentials
@@ -66,4 +102,3 @@ docker compose up --build
 - populate a small watchlist
 - keep mode on `paper`
 - verify decisions and risk events before enabling any live path
-

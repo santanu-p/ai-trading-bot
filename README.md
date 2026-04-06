@@ -57,6 +57,7 @@ No dependencies were installed and no services were started while creating this 
 - Worker: `celery -A tradingbot.worker.celery_app.celery_app worker -B`
 - Web: `next dev` or `next start`
 - Local orchestration target: `docker-compose.yml`
+- GitHub Codespaces target: `.devcontainer/`
 
 ## Core Flow
 
