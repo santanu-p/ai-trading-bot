@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Iterable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen

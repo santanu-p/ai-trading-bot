@@ -119,7 +119,7 @@ class ExecutionQualityService:
         liquidity_snapshot: LiquiditySnapshot | None,
         preferred_venue: str | None,
     ) -> ExecutionPreview:
-        normalized_symbol = symbol.upper().strip()
+        del symbol
         normalized_quantity = max(int(quantity), 1)
         reference_price = self._reference_price(intended_price, liquidity_snapshot)
         if reference_price <= 0:
