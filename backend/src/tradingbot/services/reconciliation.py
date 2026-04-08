@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from tradingbot.enums import OrderStatus, TradingMode
 from tradingbot.models import BotSettings, OrderFill, OrderRecord, ReconciliationMismatch, RiskEvent
 from tradingbot.services.adapters import BrokerAPIError, BrokerFill, BrokerOrder, ExecutionAdapter
+from tradingbot.services.alerts import AlertService
 from tradingbot.services.execution import ExecutionService
+from tradingbot.services.metrics import observe_counter
 
 TERMINAL_ORDER_STATES = {
     OrderStatus.FILLED,
@@ -47,6 +49,7 @@ class ReconciliationService:
         transitions = 0
         fills_ingested = 0
         mismatches_created = 0
+        alerts = AlertService(self.session)
 
         local_orders = self.session.scalars(
             select(OrderRecord).where(OrderRecord.broker_order_id.is_not(None)).order_by(OrderRecord.id.asc())
@@ -136,6 +139,12 @@ class ReconciliationService:
                         payload={"count": unresolved_count},
                     )
                 )
+            alerts.notify_reconciliation_unresolved(
+                unresolved_mismatches=unresolved_count,
+                source="reconciliation_service",
+                details={"mismatches_created": mismatches_created},
+            )
+            observe_counter("reconciliation.live_paused", tags={"unresolved": str(unresolved_count)})
             live_paused = True
 
         self.session.commit()

@@ -21,6 +21,8 @@ from tradingbot.services.adapters import (
 from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.contracts import ContractMasterService
 from tradingbot.services.evaluation import TradeReviewService
+from tradingbot.services.execution_quality import ExecutionQualityService
+from tradingbot.services.metrics import observe_counter
 from tradingbot.services.pretrade import PreTradeValidator
 from tradingbot.services.risk import PortfolioRiskService, risk_policy_from_settings
 
@@ -96,6 +98,13 @@ class ExecutionService:
         self.contract_master = ContractMasterService(session)
         self.pretrade = PreTradeValidator(session, self.contract_master)
         self.trade_reviews = TradeReviewService(session)
+        settings_row = self.session.get(BotSettings, 1)
+        default_venue = settings_row.broker_venue if settings_row is not None else "unknown"
+        self.execution_quality = ExecutionQualityService(
+            session,
+            broker_slug=broker.broker_slug,
+            default_venue=default_venue,
+        )
 
     def queue_trade_intent(
         self,
@@ -309,16 +318,44 @@ class ExecutionService:
             self.session.commit()
             return None
 
+        feature_snapshot = _extract_feature_snapshot(decision_context)
+        liquidity_snapshot = self._safe_liquidity_snapshot(decision.symbol)
+        execution_preview = self.execution_quality.preview_order(
+            symbol=decision.symbol,
+            side=decision.direction,
+            quantity=risk_result.approved_quantity,
+            intended_price=decision.entry,
+            feature_snapshot=feature_snapshot,
+            liquidity_snapshot=liquidity_snapshot,
+            preferred_venue=None,
+        )
+        if not execution_preview.accepted:
+            observe_counter("execution.quality_rejected", tags={"symbol": decision.symbol})
+            self.session.add(
+                RiskEvent(
+                    symbol=decision.symbol,
+                    severity="warning",
+                    code="execution_quality_rejected",
+                    message="Order blocked by execution-quality expectations before broker submission.",
+                    payload=execution_preview.to_payload(),
+                )
+            )
+            self.session.commit()
+            return None
+
         client_order_id = f"{decision.symbol.lower()}-{uuid4().hex[:20]}"
         request = OrderRequest(
             symbol=decision.symbol,
             quantity=risk_result.approved_quantity,
-            side=OrderIntent.BUY,
-            order_type=OrderType.BRACKET,
-            limit_price=decision.entry,
+            side=decision.direction,
+            order_type=execution_preview.order_type,
+            time_in_force=execution_preview.time_in_force,
+            limit_price=execution_preview.entry_limit_price,
             stop_loss=decision.stop_loss,
             take_profit=decision.take_profit,
+            reference_price=execution_preview.reference_price,
             client_order_id=client_order_id,
+            metadata={"execution_quality": execution_preview.to_payload()},
         )
 
         account_snapshot = self.broker.get_account_snapshot()
@@ -344,17 +381,25 @@ class ExecutionService:
             execution_intent_id=execution_intent_id,
             symbol=decision.symbol,
             mode=mode,
-            direction=OrderIntent.BUY,
-            order_type=OrderType.BRACKET,
+            direction=request.side,
+            order_type=request.order_type,
+            time_in_force=request.time_in_force,
             quantity=risk_result.approved_quantity,
-            limit_price=decision.entry,
+            limit_price=request.limit_price,
             stop_loss=decision.stop_loss,
             stop_price=decision.stop_loss,
             take_profit=decision.take_profit,
             status=OrderStatus.NEW,
             client_order_id=client_order_id,
             submitted_at=datetime.now(UTC),
-            metadata_json={"decision": decision_context or decision.model_dump(mode="json")},
+            metadata_json={
+                "decision": decision_context or decision.model_dump(mode="json"),
+                "execution_quality": {
+                    **execution_preview.to_payload(),
+                    "broker_slug": self.broker.broker_slug.value,
+                    "venue": execution_preview.venue,
+                },
+            },
         )
         self.session.add(order)
         self.session.flush()
@@ -370,6 +415,7 @@ class ExecutionService:
         try:
             broker_order = self.broker.place_order(request)
         except Exception as exc:  # noqa: BLE001
+            observe_counter("execution.broker_submit_failed", tags={"symbol": decision.symbol})
             self._transition_order(
                 order,
                 to_status=OrderStatus.REJECTED,
@@ -387,6 +433,7 @@ class ExecutionService:
                     payload={"error": str(exc)},
                 )
             )
+            self._record_execution_sample(order, source="broker_submit")
             self.session.commit()
             return order
 
@@ -428,6 +475,7 @@ class ExecutionService:
             payload={},
             force=True,
         )
+        self._record_execution_sample(order, source="cancel_order")
         self.session.commit()
         self.session.refresh(order)
         return order
@@ -446,6 +494,7 @@ class ExecutionService:
                 payload={},
                 force=True,
             )
+            self._record_execution_sample(order, source="cancel_all")
         self.session.commit()
         return canceled_count
 
@@ -477,6 +526,9 @@ class ExecutionService:
                 message=broker_order.status_reason or "Broker status update.",
                 payload={"broker_order_id": broker_order.broker_order_id},
             )
+
+        if broker_order.status in TERMINAL_STATUSES or order.status in TERMINAL_STATUSES:
+            self._record_execution_sample(order, source=source)
 
         return changed
 
@@ -535,6 +587,7 @@ class ExecutionService:
             force=True,
         )
         self._apply_fill_to_position(order.symbol, fill.quantity, fill.price, fill.side)
+        self._record_execution_sample(order, source=source)
         if target_status == OrderStatus.FILLED and order.direction == OrderIntent.SELL:
             review = self.trade_reviews.queue_review_for_exit_order(order)
             if review is not None:
@@ -695,6 +748,12 @@ class ExecutionService:
         position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == symbol.upper().strip()))
         return position.market_value if position else 0.0
 
+    def execution_feedback_for_symbol(self, symbol: str) -> dict[str, object]:
+        return self.execution_quality.feedback_for_symbol(symbol).to_payload()
+
+    def execution_quality_summary(self, *, dimension: str, limit: int) -> list[dict[str, object]]:
+        return self.execution_quality.summarize(dimension=dimension, limit=limit)
+
     def _require_order(self, order_id: int) -> OrderRecord:
         row = self.session.get(OrderRecord, order_id)
         if row is None:
@@ -711,6 +770,7 @@ class ExecutionService:
         intent.status = ExecutionIntentStatus.BLOCKED
         intent.block_reason = reason
         intent.failed_at = datetime.now(UTC)
+        observe_counter("execution.intent_blocked", tags={"mode": intent.mode.value})
         self.session.add(
             AuditLog(
                 action="execution.intent_blocked",
@@ -726,6 +786,7 @@ class ExecutionService:
         intent.status = ExecutionIntentStatus.FAILED
         intent.last_error = reason
         intent.failed_at = datetime.now(UTC)
+        observe_counter("execution.intent_failed", tags={"mode": intent.mode.value})
         self.session.add(
             AuditLog(
                 action="execution.intent_failed",
@@ -856,6 +917,38 @@ class ExecutionService:
         settings_row = self.session.get(BotSettings, 1)
         return PortfolioRiskService(self.session, risk_policy_from_settings(settings_row))
 
+    def _safe_liquidity_snapshot(self, symbol: str):
+        getter = getattr(self.broker, "get_liquidity_snapshot", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(symbol)
+        except Exception as exc:  # noqa: BLE001
+            self.session.add(
+                RiskEvent(
+                    symbol=symbol,
+                    severity="warning",
+                    code="execution_liquidity_unavailable",
+                    message="Failed to fetch liquidity snapshot for execution-quality checks.",
+                    payload={"error": str(exc)},
+                )
+            )
+            return None
+
+    def _record_execution_sample(self, order: OrderRecord, *, source: str) -> None:
+        try:
+            self.execution_quality.upsert_order_sample(order)
+        except Exception as exc:  # noqa: BLE001
+            self.session.add(
+                RiskEvent(
+                    symbol=order.symbol,
+                    severity="warning",
+                    code="execution_quality_capture_failed",
+                    message="Failed to persist execution-quality analytics for order.",
+                    payload={"order_id": order.id, "source": source, "error": str(exc)},
+                )
+            )
+
 
 
 def _serialize_replace_patch(patch: ReplaceOrderRequest) -> dict[str, object]:
@@ -871,3 +964,18 @@ def _serialize_replace_patch(patch: ReplaceOrderRequest) -> dict[str, object]:
     if patch.time_in_force is not None:
         payload["time_in_force"] = patch.time_in_force.value
     return payload
+
+
+def _extract_feature_snapshot(decision_context: dict[str, object] | None) -> dict[str, float]:
+    if not isinstance(decision_context, dict):
+        return {}
+    raw = decision_context.get("feature_snapshot")
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, float] = {}
+    for key, value in raw.items():
+        try:
+            normalized[str(key)] = float(value)
+        except (TypeError, ValueError):
+            continue
+    return normalized

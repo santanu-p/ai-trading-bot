@@ -38,6 +38,20 @@ Use the kill switch when:
 - `pretrade_rejected`
 - `broker_submit_failed`
 - `reconciliation_unresolved`
+- `alert_worker_failures`
+- `alert_high_rejection_rate`
+- `alert_malformed_outputs`
+- `alert_kill_switch_activated`
+- `alert_reconciliation_unresolved`
+
+## Release Discipline Checks
+
+Before shipping strategy, prompt, risk-threshold, or execution-logic changes:
+
+1. Run backend lint/type/unit/replay checks.
+2. Run schema drift verification.
+3. Record a release entry in [strategy-change-log.md](strategy-change-log.md) with replay evidence and rollback notes.
+4. Require reviewer sign-off for the release entry.
 
 ## Before Any Live Use
 
@@ -51,6 +65,6 @@ Use the kill switch when:
 
 ## Current Operational Gaps
 
-- no alerting integration
-- no persistent metrics/trace pipeline
+- no externalized metrics/trace sink (telemetry is currently in-process only)
+- no centralized alert-routing integration (pager/on-call/webhook)
 - no websocket event stream from the broker into the dashboard

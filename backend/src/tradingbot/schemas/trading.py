@@ -178,6 +178,76 @@ class RiskEventResponse(BaseModel):
     created_at: datetime
 
 
+class MetricCounterResponse(BaseModel):
+    name: str
+    value: float
+    tags: dict[str, str] = Field(default_factory=dict)
+
+
+class MetricLatencyResponse(BaseModel):
+    name: str
+    samples: int
+    avg_ms: float
+    p95_ms: float
+    max_ms: float
+    tags: dict[str, str] = Field(default_factory=dict)
+
+
+class PerformanceSummaryResponse(BaseModel):
+    window_minutes: int
+    total_trade_candidates: int
+    rejected_trade_candidates: int
+    rejection_rate: float
+    malformed_events: int
+    scan_failures: int
+    kill_switch_enabled: bool
+    live_enabled: bool
+    mode: TradingMode
+    counters: list[MetricCounterResponse] = Field(default_factory=list)
+    latencies: list[MetricLatencyResponse] = Field(default_factory=list)
+
+
+class ExecutionQualitySampleResponse(BaseModel):
+    id: int
+    order_id: int
+    symbol: str
+    broker_slug: str
+    venue: str
+    order_type: OrderType
+    side: OrderIntent
+    outcome_status: OrderStatus
+    quantity: int
+    filled_quantity: int
+    fill_ratio: float
+    intended_price: float | None = None
+    realized_price: float | None = None
+    expected_slippage_bps: float | None = None
+    realized_slippage_bps: float | None = None
+    expected_spread_bps: float | None = None
+    spread_cost: float
+    notional: float
+    time_to_fill_seconds: float | None = None
+    aggressiveness: str | None = None
+    quality_score: float
+    payload: dict[str, Any]
+    created_at: datetime
+
+
+class ExecutionQualitySummaryResponse(BaseModel):
+    dimension: str
+    key: str
+    sample_count: int
+    filled_count: int
+    cancel_rate: float
+    reject_rate: float
+    avg_expected_slippage_bps: float
+    avg_realized_slippage_bps: float
+    avg_spread_cost: float
+    avg_time_to_fill_seconds: float
+    avg_fill_ratio: float
+    avg_quality_score: float
+
+
 class AuditLogResponse(BaseModel):
     id: int
     action: str

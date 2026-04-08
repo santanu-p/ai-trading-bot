@@ -22,8 +22,21 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8.3.0"
+  "mypy>=1.15.0",
+  "pytest>=8.3.0",
+  "ruff>=0.11.0"
 ]
+
+[tool.pytest.ini_options]
+markers = [
+  "replay: deterministic replay regression tests"
+]
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+files = ["src"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

@@ -67,9 +67,13 @@ Responsibilities:
 - committee proposal/finalization across specialist roles plus chair summary
 - output-schema repair flow for malformed agent payloads
 - deterministic risk validation
+- execution-quality modeling and adaptive aggressiveness planning
 - market calendar/session enforcement
 - execution persistence
 - execution intent queuing and approval handling
+- post-submit execution/TCA analytics and symbol-quality feedback
+- structured observability context (request/run IDs), JSON logging, and in-process metric aggregation
+- operational alert synthesis from failure/rejection/reconciliation pressure signals
 - settings persistence
 - research backtest simulation (slippage, commission, delayed fills, rejects)
 - walk-forward and regime scoring
@@ -153,6 +157,7 @@ Sizing is then scaled by:
 - strategy confidence
 - equity-curve drawdown throttle
 - loss-streak throttle
+- execution-quality feedback scale
 
 ### 7. Intent handoff
 
@@ -161,6 +166,12 @@ If approved, the worker persists an execution intent instead of submitting inlin
 ### 8. Execution boundary
 
 A dedicated execution task re-checks kill switch state, market session, live enablement, and broker connectivity before broker submission.
+The execution service also computes pre-submit fill-quality expectations (spread/slippage/liquidity) and can reject poor setups before they reach the broker.
+
+### 9. Execution analytics and feedback
+
+Order outcomes persist execution-quality samples with intended vs realized fill metrics, slippage, spread cost, and time-to-fill.
+Recent symbol-level quality is summarized into feedback signals that can block weak symbols or throttle risk sizing in subsequent scans.
 
 ## Post-Trade Review Flow
 
@@ -178,6 +189,14 @@ A dedicated execution task re-checks kill switch state, market session, live ena
 4. Backtest service replays historical bars/news, simulates delayed/rejected fills, and applies slippage + commission.
 5. Service computes portfolio metrics, walk-forward windows, regime breakdown, and equity-curve payload.
 6. Worker persists summary + detail payloads in `backtest_reports` and per-trade rows in `backtest_trades`.
+
+## Observability And Alert Flow
+
+1. API middleware assigns/propagates a request ID and emits structured request-start/request-complete logs.
+2. Worker and execution tasks emit counters and latency distributions for scan/reconciliation/intent/backtest boundaries.
+3. Alpaca adapter and LLM clients emit external-call latency and success/error counters.
+4. Alert synthesis evaluates runtime windows and emits persisted `alert_*` events for worker instability, reconciliation stress, kill-switch activation, and rejection/malformed spikes.
+5. Operators consume these signals via `/performance/summary` and `/alerts`, and the dashboard risk view surfaces them.
 
 ## Storage Model
 
@@ -198,6 +217,7 @@ Current ORM models cover:
 - `risk_events`
 - `portfolio_snapshots`
 - `symbol_cooldowns`
+- `execution_quality_samples`
 - `audit_logs`
 - `backtest_reports`
 - `backtest_trades`

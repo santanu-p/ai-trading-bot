@@ -15,7 +15,10 @@ Status note as of 2026-04-08:
 - Phase 4 data-depth items are now implemented in the current repo.
 - Phase 5 agent-intelligence items are now implemented in the current repo.
 - Phase 6 portfolio-risk engine items are now implemented in the current repo.
-- The remaining sections below describe the next upgrade path starting from Phase 7.
+- Phase 7 execution-quality items are now implemented in the current repo.
+- Phase 8 observability and operations baseline items are now implemented in the current repo.
+- Phase 9 testing and release-discipline items are now implemented in the current repo.
+- The remaining sections below describe the next upgrade path after Phase 9.
 
 ## Critical Scope Decision
 
@@ -683,6 +686,8 @@ Implemented:
 
 ## Phase 7: Optimize Execution Quality
 
+Current repo status: completed.
+
 ### Model real execution, not just decision quality
 
 Current issue:
@@ -696,6 +701,12 @@ What to add or modify:
 - reject trades with poor fill quality expectations
 - adapt order type and aggressiveness to liquidity
 
+Implemented:
+
+- execution now computes a pre-submit execution-quality preview using quote spread, depth, and symbol features
+- expected spread/slippage and liquidity score are evaluated before broker submission, with hard reject on poor expected fill quality
+- order aggressiveness now adapts between aggressive, balanced, and passive plans, including time-in-force and entry style tuning
+
 ### Add venue, liquidity, and routing logic
 
 What to add or modify:
@@ -704,6 +715,12 @@ What to add or modify:
 - pick order aggressiveness from liquidity and spread conditions
 - route by venue or broker when more than one execution path exists
 - reject trades with poor expected fill quality
+
+Implemented:
+
+- execution adapters now expose liquidity snapshots and quote-derived venue context where available
+- submission routing now records venue and broker context in execution-quality metadata for downstream analytics
+- thin/unstable spread conditions are rejected before order placement rather than after failed fills
 
 Suggested files:
 
@@ -720,7 +737,16 @@ What to add or modify:
 - compare execution quality by symbol, venue, broker, and order type
 - feed poor execution outcomes back into symbol selection and risk sizing
 
+Implemented:
+
+- execution-quality samples are now persisted per order with intended vs realized price, slippage, spread cost, fill ratio, and time-to-fill
+- API endpoints now expose both raw execution-quality samples and grouped TCA summaries by symbol/venue/broker/order type
+- scan-time symbol selection now blocks entries when execution quality is persistently poor
+- deterministic risk sizing now applies execution-feedback scaling so degraded fill quality reduces approved position size
+
 ## Phase 8: Improve Observability And Operations
+
+Current repo status: completed.
 
 ### Add structured logging and metrics
 
@@ -732,6 +758,13 @@ What to add or modify:
 - counters for approvals, rejections, malformed outputs, execution failures
 - latency metrics for Alpaca and OpenAI calls
 
+Implemented:
+
+- API middleware now emits structured JSON logs with request IDs, status codes, and request-latency measurements.
+- worker and execution task boundaries now emit counters and latency metrics for scans, reconciliation, intent execution, and backtests.
+- Alpaca and LLM client calls now emit latency/counter telemetry for success and error paths.
+- a performance summary API now exposes aggregated counters and latency distributions for operator visibility.
+
 ### Add alerts
 
 What to add or modify:
@@ -740,6 +773,12 @@ What to add or modify:
 - notify on kill-switch activation
 - notify on broker reconciliation mismatch
 - notify on unusually high rejection rates or malformed agent outputs
+
+Implemented:
+
+- alert synthesis now emits `alert_worker_failures`, `alert_high_rejection_rate`, and `alert_malformed_outputs` based on recent runtime windows.
+- kill-switch and reconciliation pause conditions now emit dedicated operational alerts.
+- alerts are persisted as risk events with `alert_*` codes and exposed through a dedicated alerts API read.
 
 ### Add dashboard depth for operators
 
@@ -751,12 +790,20 @@ What to add or modify:
 - per-agent disagreement analysis
 - open risk budget visualization
 
+Implemented:
+
+- the risk dashboard now includes a performance snapshot panel with rejection pressure, malformed/scan-failure counts, and top metric latency/counter tables.
+- the risk dashboard now includes an operational alerts panel sourced from persisted `alert_*` events.
+- execution-quality/TCA panels remain integrated with filtering and now sit alongside the new observability surface.
+
 Suggested files:
 
 - [dashboard-screen.tsx](../web/src/components/dashboard-screen.tsx)
 - new route pages under `web/app/`
 
 ## Phase 9: Improve Testing And Release Discipline
+
+Current repo status: completed.
 
 ### Expand tests beyond unit checks
 
@@ -768,6 +815,14 @@ What to add or modify:
 - model payload validation tests
 - end-to-end replay tests
 
+Implemented:
+
+- API integration coverage now includes auth/session flow, protected observability endpoints, and request-ID middleware behavior.
+- worker task coverage now validates intent dispatch and replay-task output contracts.
+- broker adapter contract coverage now validates routing guardrails plus Alpaca error/order normalization behavior.
+- payload validation coverage now verifies committee decision model constraints and enum alignment against `committee-decision.schema.json`.
+- replay E2E coverage now runs deterministic fixture-backed regression checks under a dedicated `replay` pytest marker.
+
 ### Add CI and quality gates
 
 What to add or modify:
@@ -778,12 +833,23 @@ What to add or modify:
 - replay regression tests
 - schema drift checks
 
+Implemented:
+
+- CI workflow now runs backend lint (`ruff`), backend type checks (`mypy`), backend unit tests, replay-regression tests, and web TypeScript checks.
+- schema drift validation now runs as a dedicated quality gate using `backend/scripts/check_schema_drift.py`.
+- replay regression is now isolated into marker-based test gates for clear pass/fail release evidence.
+
 ### Add release notes for strategy changes
 
 What to add or modify:
 
 - treat strategy logic changes like product releases
 - document changes in prompt versions, risk rules, execution behavior, and thresholds
+
+Implemented:
+
+- strategy changes are now documented in [strategy-change-log.md](./strategy-change-log.md) with a structured release template.
+- the strategy change log now includes release entries for Phase 7, Phase 8, and Phase 9, including replay evidence and rollback notes.
 
 ## Suggested New Files And Modules
 
@@ -823,11 +889,11 @@ Minimum bar:
 
 If the goal is maximum improvement for the next development cycle, do these first:
 
-1. Add execution-quality analytics and TCA feedback loops so symbol selection and sizing react to observed fill quality.
-2. Expand observability with structured logs, alerting, and operator-facing performance/risk analytics.
-3. Harden CI/release discipline with replay regression gates and strategy-change release notes.
-4. Deepen the operator surface so review queues, committee disagreement, and prompt-version performance are visible in the dashboard.
-5. Add release-level controls for strategy/risk threshold rollout and rollback auditability.
+1. Enforce branch-protection requirements on all CI gates and add mandatory reviewer sign-off for strategy/risk changes.
+2. Expand replay fixtures across more symbols/regimes and add failure-injection scenarios for broker/provider instability.
+3. Add release-level controls for strategy/risk threshold rollout and rollback auditability.
+4. Deepen the operator surface with committee disagreement drill-downs, open risk budget visuals, and richer prompt-version performance attribution.
+5. Add websocket/event-stream transport so operators can consume alerts, fills, and risk-state transitions in near real time.
 
 ## Definition Of "Expert" For This Repo
 

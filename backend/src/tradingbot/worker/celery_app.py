@@ -13,6 +13,7 @@ celery_app = Celery(
     include=[
         "tradingbot.worker.tasks",
         "tradingbot.worker.execution_tasks",
+        "tradingbot.worker.replay_tasks",
     ],
 )
 celery_app.conf.timezone = settings.market_timezone

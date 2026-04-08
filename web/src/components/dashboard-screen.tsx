@@ -14,7 +14,11 @@ import {
   flattenAllPositions,
   getBacktestReport,
   getCurrentSession,
+  getPerformanceSummary,
+  listExecutionQualitySamples,
+  listExecutionQualitySummary,
   getSettings,
+  listAlerts,
   launchBacktest,
   listAuditLogs,
   listBacktests,
@@ -49,12 +53,16 @@ import type {
   BotSettingsUpdatePayload,
   BrokerSettings,
   CommitteeDecision,
+  ExecutionQualitySampleResponse,
+  ExecutionQualitySummaryResponse,
   ExecutionIntentResponse,
   LiveEnablePrepareResponse,
   LoginResponse,
+  OrderStatus,
   OrderFillResponse,
   OrderResponse,
   OrderTransitionResponse,
+  PerformanceSummaryResponse,
   PositionResponse,
   ReconciliationMismatchResponse,
   RiskEventResponse,
@@ -76,6 +84,53 @@ import {
 } from "@/lib/trading-profile";
 
 type SectionName = "overview" | "orders" | "decisions" | "risk" | "backtests" | "settings";
+type ExecutionSummaryDimension = "symbol" | "venue" | "broker" | "order_type";
+type ExecutionSampleStatusFilter = "all" | OrderStatus;
+
+const executionSummaryDimensionOptions: Array<{ value: ExecutionSummaryDimension; label: string }> = [
+  { value: "symbol", label: "Symbol" },
+  { value: "venue", label: "Venue" },
+  { value: "broker", label: "Broker" },
+  { value: "order_type", label: "Order type" }
+];
+
+const executionSummaryDimensionLabels: Record<ExecutionSummaryDimension, string> = {
+  symbol: "Symbol",
+  venue: "Venue",
+  broker: "Broker",
+  order_type: "Order type"
+};
+
+const executionSampleStatusOptions: OrderStatus[] = [
+  "new",
+  "accepted",
+  "pending_trigger",
+  "partially_filled",
+  "filled",
+  "canceled",
+  "expired",
+  "replaced",
+  "rejected",
+  "suspended"
+];
+
+interface ExecutionQualityFilters {
+  summaryDimension: ExecutionSummaryDimension;
+  summaryLimit: number;
+  sampleSymbol: string;
+  sampleStatus: ExecutionSampleStatusFilter;
+  sampleLimit: number;
+}
+
+function defaultExecutionQualityFilters(): ExecutionQualityFilters {
+  return {
+    summaryDimension: "symbol",
+    summaryLimit: 8,
+    sampleSymbol: "",
+    sampleStatus: "all",
+    sampleLimit: 12
+  };
+}
 
 const sections: Array<{ href: string; label: string; key: SectionName }> = [
   { href: "/", label: "Overview", key: "overview" },
@@ -216,6 +271,14 @@ export function DashboardScreen({ section }: Props) {
   const [orderFills, setOrderFills] = useState<OrderFillResponse[]>([]);
   const [positions, setPositions] = useState<PositionResponse[]>([]);
   const [riskEvents, setRiskEvents] = useState<RiskEventResponse[]>([]);
+  const [alerts, setAlerts] = useState<RiskEventResponse[]>([]);
+  const [performanceSummary, setPerformanceSummary] = useState<PerformanceSummaryResponse | null>(null);
+  const [executionQualitySamples, setExecutionQualitySamples] = useState<ExecutionQualitySampleResponse[]>([]);
+  const [executionQualitySummary, setExecutionQualitySummary] = useState<ExecutionQualitySummaryResponse[]>([]);
+  const [executionFilters, setExecutionFilters] = useState<ExecutionQualityFilters>(() => defaultExecutionQualityFilters());
+  const [executionFilterDraft, setExecutionFilterDraft] = useState<ExecutionQualityFilters>(() =>
+    defaultExecutionQualityFilters()
+  );
   const [mismatches, setMismatches] = useState<ReconciliationMismatchResponse[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogResponse[]>([]);
   const [sessions, setSessions] = useState<SessionResponse[]>([]);
@@ -258,6 +321,13 @@ export function DashboardScreen({ section }: Props) {
     setOrderFills([]);
     setPositions([]);
     setRiskEvents([]);
+    setAlerts([]);
+    setPerformanceSummary(null);
+    setExecutionQualitySamples([]);
+    setExecutionQualitySummary([]);
+    const defaults = defaultExecutionQualityFilters();
+    setExecutionFilters(defaults);
+    setExecutionFilterDraft(defaults);
     setMismatches([]);
     setAuditLogs([]);
     setSessions([]);
@@ -337,6 +407,10 @@ export function DashboardScreen({ section }: Props) {
       ordersResponse,
       positionsResponse,
       riskResponse,
+      alertsResponse,
+      performanceResponse,
+      executionQualitySamplesResponse,
+      executionQualitySummaryResponse,
       mismatchesResponse,
       auditResponse,
       sessionResponse,
@@ -349,6 +423,14 @@ export function DashboardScreen({ section }: Props) {
       listOrders(),
       listPositions(),
       listRiskEvents(),
+      listAlerts(16),
+      getPerformanceSummary(60),
+      listExecutionQualitySamples(
+        executionFilters.sampleSymbol || undefined,
+        executionFilters.sampleStatus === "all" ? undefined : executionFilters.sampleStatus,
+        executionFilters.sampleLimit
+      ),
+      listExecutionQualitySummary(executionFilters.summaryDimension, executionFilters.summaryLimit),
       listReconciliationMismatches(),
       listAuditLogs(24),
       listSessions(),
@@ -363,6 +445,10 @@ export function DashboardScreen({ section }: Props) {
     setOrders(ordersResponse);
     setPositions(positionsResponse);
     setRiskEvents(riskResponse);
+    setAlerts(alertsResponse);
+    setPerformanceSummary(performanceResponse);
+    setExecutionQualitySamples(executionQualitySamplesResponse);
+    setExecutionQualitySummary(executionQualitySummaryResponse);
     setMismatches(mismatchesResponse);
     setAuditLogs(auditResponse);
     setSessions(sessionResponse);
@@ -411,7 +497,7 @@ export function DashboardScreen({ section }: Props) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [operator, selectedOrderId, selectedBacktestId]);
+  }, [operator, selectedOrderId, selectedBacktestId, executionFilters]);
 
   const filteredOrders = useMemo(() => {
     if (!deferredFilter) {
@@ -440,6 +526,8 @@ export function DashboardScreen({ section }: Props) {
     [orders, selectedOrderId]
   );
 
+  const executionSummaryKeyLabel = executionSummaryDimensionLabels[executionFilters.summaryDimension];
+
   function canCancel(status: string) {
     return ["new", "accepted", "pending_trigger", "partially_filled", "suspended"].includes(status);
   }
@@ -466,6 +554,23 @@ export function DashboardScreen({ section }: Props) {
     } finally {
       setLoading(false);
     }
+  }
+
+  function applyExecutionQualityFilters(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setExecutionFilters({
+      summaryDimension: executionFilterDraft.summaryDimension,
+      summaryLimit: Math.min(Math.max(Math.round(executionFilterDraft.summaryLimit), 1), 200),
+      sampleSymbol: executionFilterDraft.sampleSymbol.trim().toUpperCase(),
+      sampleStatus: executionFilterDraft.sampleStatus,
+      sampleLimit: Math.min(Math.max(Math.round(executionFilterDraft.sampleLimit), 1), 500)
+    });
+  }
+
+  function resetExecutionQualityFilters() {
+    const defaults = defaultExecutionQualityFilters();
+    setExecutionFilters(defaults);
+    setExecutionFilterDraft(defaults);
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
@@ -1337,6 +1442,106 @@ export function DashboardScreen({ section }: Props) {
           <div className="dashboard-grid">
             <section className="panel">
               <div className="panel-heading">
+                <h3>Performance snapshot</h3>
+                <p>Recent operator metrics, rejection pressure, and latency envelopes.</p>
+              </div>
+              {performanceSummary ? (
+                <>
+                  <div className="metric-row">
+                    <article className="metric-block">
+                      <span>Window</span>
+                      <strong>{performanceSummary.window_minutes}m</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Rejection rate</span>
+                      <strong>{percent(performanceSummary.rejection_rate)}</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Malformed outputs</span>
+                      <strong>{performanceSummary.malformed_events}</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Scan failures</span>
+                      <strong>{performanceSummary.scan_failures}</strong>
+                    </article>
+                  </div>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Counter metric</th>
+                        <th>Value</th>
+                        <th>Tags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {performanceSummary.counters.slice(0, 8).map((item) => (
+                        <tr key={`${item.name}-${JSON.stringify(item.tags)}`}>
+                          <td>{item.name}</td>
+                          <td>{item.value.toFixed(2)}</td>
+                          <td>{Object.entries(item.tags).map(([key, value]) => `${key}:${value}`).join(" | ") || "n/a"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {performanceSummary.counters.length === 0 ? (
+                    <p className="muted">No counter samples in the selected window.</p>
+                  ) : null}
+
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Latency metric</th>
+                        <th>P95</th>
+                        <th>Avg</th>
+                        <th>Samples</th>
+                        <th>Tags</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {performanceSummary.latencies.slice(0, 8).map((item) => (
+                        <tr key={`${item.name}-${JSON.stringify(item.tags)}`}>
+                          <td>{item.name}</td>
+                          <td>{item.p95_ms.toFixed(2)} ms</td>
+                          <td>{item.avg_ms.toFixed(2)} ms</td>
+                          <td>{item.samples}</td>
+                          <td>{Object.entries(item.tags).map(([key, value]) => `${key}:${value}`).join(" | ") || "n/a"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {performanceSummary.latencies.length === 0 ? (
+                    <p className="muted">No latency samples in the selected window.</p>
+                  ) : null}
+                </>
+              ) : (
+                <p className="muted">Performance summary is unavailable.</p>
+              )}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Operational alerts</h3>
+                <p>Auto-alerts for kill switch, worker instability, and reconciliation stress.</p>
+              </div>
+              <div className="stack-list">
+                {alerts.map((event) => (
+                  <div className="risk-item" key={event.id}>
+                    <div>
+                      <strong>{event.code}</strong>
+                      <p>{event.message}</p>
+                    </div>
+                    <div className="risk-meta">
+                      <span>{event.severity}</span>
+                      <span>{timestamp(event.created_at)}</span>
+                    </div>
+                  </div>
+                ))}
+                {alerts.length === 0 ? <p className="muted">No active operational alerts.</p> : null}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
                 <h3>Risk events</h3>
                 <p>Guardrail trips, scan failures, and rejected trades.</p>
               </div>
@@ -1378,6 +1583,195 @@ export function DashboardScreen({ section }: Props) {
                 ))}
                 {mismatches.length === 0 ? <p className="muted">No unresolved reconciliation mismatches.</p> : null}
               </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading compact">
+                <h3>Execution quality filters</h3>
+                <p>Change grouping and sample filters, then apply.</p>
+              </div>
+              <form id="execution-quality-filter-form" className="settings-grid" onSubmit={applyExecutionQualityFilters}>
+                <label>
+                  Summary dimension
+                  <select
+                    value={executionFilterDraft.summaryDimension}
+                    onChange={(event) =>
+                      setExecutionFilterDraft((current) => ({
+                        ...current,
+                        summaryDimension: event.target.value as ExecutionSummaryDimension
+                      }))
+                    }
+                  >
+                    {executionSummaryDimensionOptions.map((item) => (
+                      <option key={item.value} value={item.value}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Summary rows
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={executionFilterDraft.summaryLimit}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      setExecutionFilterDraft((current) => ({
+                        ...current,
+                        summaryLimit: Number.isFinite(next) ? next : current.summaryLimit
+                      }));
+                    }}
+                  />
+                </label>
+
+                <label>
+                  Sample symbol
+                  <input
+                    type="text"
+                    placeholder="AAPL (optional)"
+                    value={executionFilterDraft.sampleSymbol}
+                    onChange={(event) =>
+                      setExecutionFilterDraft((current) => ({ ...current, sampleSymbol: event.target.value }))
+                    }
+                  />
+                </label>
+
+                <label>
+                  Sample status
+                  <select
+                    value={executionFilterDraft.sampleStatus}
+                    onChange={(event) =>
+                      setExecutionFilterDraft((current) => ({
+                        ...current,
+                        sampleStatus: event.target.value as ExecutionSampleStatusFilter
+                      }))
+                    }
+                  >
+                    <option value="all">All</option>
+                    {executionSampleStatusOptions.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <label>
+                  Sample rows
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={executionFilterDraft.sampleLimit}
+                    onChange={(event) => {
+                      const next = Number(event.target.value);
+                      setExecutionFilterDraft((current) => ({
+                        ...current,
+                        sampleLimit: Number.isFinite(next) ? next : current.sampleLimit
+                      }));
+                    }}
+                  />
+                </label>
+              </form>
+              <div className="inline-action-row">
+                <button
+                  className="secondary-button"
+                  type="submit"
+                  form="execution-quality-filter-form"
+                  disabled={busy || loading}
+                >
+                  Apply filters
+                </button>
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={resetExecutionQualityFilters}
+                  disabled={busy || loading}
+                >
+                  Reset
+                </button>
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Execution quality summary</h3>
+                <p>Grouped TCA by {executionSummaryKeyLabel.toLowerCase()} from recent orders.</p>
+              </div>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>{executionSummaryKeyLabel}</th>
+                    <th>Samples</th>
+                    <th>Reject</th>
+                    <th>Avg slippage</th>
+                    <th>Avg quality</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {executionQualitySummary.map((item) => (
+                    <tr key={`${item.dimension}-${item.key}`}>
+                      <td>{item.key}</td>
+                      <td>{item.sample_count}</td>
+                      <td>{percent(item.reject_rate)}</td>
+                      <td>{item.avg_realized_slippage_bps.toFixed(2)} bps</td>
+                      <td>{item.avg_quality_score.toFixed(3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {executionQualitySummary.length === 0 ? (
+                <p className="muted">No execution-quality summary rows yet.</p>
+              ) : null}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Recent execution samples</h3>
+                <p>Intended vs realized execution outcomes and fill diagnostics.</p>
+              </div>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Status</th>
+                    <th>Agg</th>
+                    <th>Expected</th>
+                    <th>Realized</th>
+                    <th>Fill ratio</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {executionQualitySamples.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.symbol}</td>
+                      <td>{item.outcome_status}</td>
+                      <td>{item.aggressiveness ?? "n/a"}</td>
+                      <td>
+                        {item.expected_slippage_bps !== null && item.expected_slippage_bps !== undefined
+                          ? `${item.expected_slippage_bps.toFixed(2)} bps`
+                          : "n/a"}
+                      </td>
+                      <td>
+                        {item.realized_slippage_bps !== null && item.realized_slippage_bps !== undefined
+                          ? `${item.realized_slippage_bps.toFixed(2)} bps`
+                          : "n/a"}
+                      </td>
+                      <td>{percent(item.fill_ratio)}</td>
+                      <td>
+                        {item.time_to_fill_seconds !== null && item.time_to_fill_seconds !== undefined
+                          ? `${item.time_to_fill_seconds.toFixed(1)}s`
+                          : "n/a"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {executionQualitySamples.length === 0 ? <p className="muted">No execution samples yet.</p> : null}
             </section>
 
             <section className="panel">

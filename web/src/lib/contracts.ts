@@ -309,6 +309,76 @@ export interface RiskEventResponse {
   created_at: string;
 }
 
+export interface MetricCounterResponse {
+  name: string;
+  value: number;
+  tags: Record<string, string>;
+}
+
+export interface MetricLatencyResponse {
+  name: string;
+  samples: number;
+  avg_ms: number;
+  p95_ms: number;
+  max_ms: number;
+  tags: Record<string, string>;
+}
+
+export interface PerformanceSummaryResponse {
+  window_minutes: number;
+  total_trade_candidates: number;
+  rejected_trade_candidates: number;
+  rejection_rate: number;
+  malformed_events: number;
+  scan_failures: number;
+  kill_switch_enabled: boolean;
+  live_enabled: boolean;
+  mode: TradingMode;
+  counters: MetricCounterResponse[];
+  latencies: MetricLatencyResponse[];
+}
+
+export interface ExecutionQualitySampleResponse {
+  id: number;
+  order_id: number;
+  symbol: string;
+  broker_slug: BrokerSlug;
+  venue: string;
+  order_type: OrderType;
+  side: OrderIntent;
+  outcome_status: OrderStatus;
+  quantity: number;
+  filled_quantity: number;
+  fill_ratio: number;
+  intended_price?: number | null;
+  realized_price?: number | null;
+  expected_slippage_bps?: number | null;
+  realized_slippage_bps?: number | null;
+  expected_spread_bps?: number | null;
+  spread_cost: number;
+  notional: number;
+  time_to_fill_seconds?: number | null;
+  aggressiveness?: string | null;
+  quality_score: number;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ExecutionQualitySummaryResponse {
+  dimension: string;
+  key: string;
+  sample_count: number;
+  filled_count: number;
+  cancel_rate: number;
+  reject_rate: number;
+  avg_expected_slippage_bps: number;
+  avg_realized_slippage_bps: number;
+  avg_spread_cost: number;
+  avg_time_to_fill_seconds: number;
+  avg_fill_ratio: number;
+  avg_quality_score: number;
+}
+
 export interface AuditLogResponse {
   id: number;
   action: string;

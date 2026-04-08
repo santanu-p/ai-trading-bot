@@ -228,6 +228,7 @@ textarea {
 .filter-input,
 .login-form input,
 .settings-grid input,
+.settings-grid select,
 .watchlist-field textarea {
   width: 100%;
   border-radius: 16px;

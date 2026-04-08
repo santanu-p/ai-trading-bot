@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
+from time import perf_counter
 from typing import Any
 
 from tradingbot.config import get_settings
+from tradingbot.services.metrics import observe_counter, observe_duration_ms
 
 try:
     from openai import OpenAI
@@ -31,12 +33,24 @@ class OpenAIClient(LLMClient):
         self.model = model
 
     def complete_json(self, *, system_prompt: str, prompt_payload: dict[str, Any]) -> str:
-        response = self.client.responses.create(
-            model=self.model,
-            instructions=system_prompt,
-            input=json.dumps(prompt_payload, indent=2),
-        )
-        return response.output_text
+        started = perf_counter()
+        try:
+            response = self.client.responses.create(
+                model=self.model,
+                instructions=system_prompt,
+                input=json.dumps(prompt_payload, indent=2),
+            )
+            observe_counter("external.llm.requests", tags={"provider": "openai", "status": "success"})
+            return response.output_text
+        except Exception:
+            observe_counter("external.llm.requests", tags={"provider": "openai", "status": "error"})
+            raise
+        finally:
+            observe_duration_ms(
+                "external.llm.latency_ms",
+                duration_ms=(perf_counter() - started) * 1000,
+                tags={"provider": "openai", "model": self.model},
+            )
 
 
 class GeminiClient(LLMClient):
@@ -47,15 +61,27 @@ class GeminiClient(LLMClient):
         self.model = model
 
     def complete_json(self, *, system_prompt: str, prompt_payload: dict[str, Any]) -> str:
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=json.dumps(prompt_payload, indent=2),
-            config={
-                "system_instruction": system_prompt,
-                "response_mime_type": "application/json",
-            },
-        )
-        return response.text or ""
+        started = perf_counter()
+        try:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=json.dumps(prompt_payload, indent=2),
+                config={
+                    "system_instruction": system_prompt,
+                    "response_mime_type": "application/json",
+                },
+            )
+            observe_counter("external.llm.requests", tags={"provider": "gemini", "status": "success"})
+            return response.text or ""
+        except Exception:
+            observe_counter("external.llm.requests", tags={"provider": "gemini", "status": "error"})
+            raise
+        finally:
+            observe_duration_ms(
+                "external.llm.latency_ms",
+                duration_ms=(perf_counter() - started) * 1000,
+                tags={"provider": "gemini", "model": self.model},
+            )
 
 
 def build_llm_client(model: str | None = None) -> LLMClient:

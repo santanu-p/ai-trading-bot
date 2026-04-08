@@ -105,6 +105,12 @@ Backtests displays:
 
 Risk displays risk events, reconciliation mismatches, and audit history.
 Risk events now include explicit data-quality rejection codes when stale or incomplete feeds block symbols.
+Risk also now includes execution-quality analytics panels for grouped TCA summaries and recent per-order fill-quality samples.
+Operators can now filter these execution-quality panels by summary dimension (`symbol`/`venue`/`broker`/`order_type`) and sample filters (symbol, order status, row limits).
+Risk now also includes a Phase 8 observability surface:
+
+- an operational alerts panel sourced from `alert_*` backend events
+- a performance snapshot panel with recent rejection pressure, malformed-output counts, scan-failure counts, and top latency/counter metrics
 
 Settings displays editable fields for all configurable guardrails and the watchlist plus live safety controls and session management.
 

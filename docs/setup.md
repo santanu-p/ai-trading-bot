@@ -35,6 +35,23 @@ alembic upgrade head
 uvicorn tradingbot.api.main:app --reload
 ```
 
+### Phase 9 Quality Gates (Local)
+
+```bash
+cd backend
+ruff check src tests scripts
+mypy src
+pytest -q -m "not replay"
+pytest -q -m replay
+python scripts/check_schema_drift.py
+```
+
+```bash
+cd web
+npm install
+npm run type-check
+```
+
 ### Worker
 
 ```bash

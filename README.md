@@ -40,6 +40,21 @@ No dependencies were installed and no services were started while creating this 
   - dynamic sizing (ATR/volatility/confidence/equity-curve/loss-streak scaling)
   - drawdown and anomaly circuit breakers with automatic kill-switch activation
   - persisted contextual symbol cooldowns (`profit_exit`, `stop_out`, `news_whipsaw`, `event_failure`)
+- Phase 7 execution-quality upgrades with:
+  - pre-submit execution-quality gating using spread/depth/liquidity estimates
+  - adaptive order aggressiveness and time-in-force selection from liquidity conditions
+  - persisted per-order execution/TCA analytics (intended vs realized fill, slippage, spread cost, fill ratio, time-to-fill)
+  - execution feedback loops that can block weak symbols and reduce risk sizing when fill quality degrades
+- Phase 8 observability and operations upgrades with:
+  - structured JSON request/worker logs with request IDs and run-aware tracing context
+  - in-process metric counters and latency distributions for worker/execution/LLM/broker paths
+  - synthesized operational alerts for kill-switch activation, reconciliation stress, worker instability, and rejection/malformed spikes
+  - operator-facing performance and alert panels in the risk dashboard
+- Phase 9 testing and release-discipline upgrades with:
+  - expanded backend test matrix for API integration, worker tasks, broker adapter contracts, payload validation, and replay E2E coverage
+  - replay-regression worker task for deterministic fixture-backed release checks
+  - CI workflow gates for lint, type checks, unit tests, replay regression tests, and schema drift checks
+  - strategy change release notes with replay evidence and rollback guidance
 - Multi-agent committee shape:
   - structured specialist committee
   - deterministic risk engine
@@ -98,11 +113,14 @@ No dependencies were installed and no services were started while creating this 
 5. For each enabled watchlist symbol, the worker fetches Alpaca bars and Alpaca news.
 6. The worker computes engineered features, merges index context, extracts structured events, and validates data freshness/feed integrity.
 7. A specialist committee produces structured decisions, the chair summarizes them, and malformed outputs get one repair pass before rejection.
-8. The risk engine deterministically approves or rejects the committee proposal with portfolio-aware limits and dynamic sizing.
+8. The risk engine deterministically approves or rejects the committee proposal with portfolio-aware limits, dynamic sizing, and execution-quality feedback scaling.
 9. Approved decisions are persisted as execution intents instead of being submitted inline.
-10. Operators review live intents when required, and the execution worker re-checks market hours, kill switch, broker connectivity, and live gates before broker submission.
-11. Filled exits generate post-trade reviews tied back to model/prompt lineage and update outcome-aware symbol cooldown state.
-12. The dashboard and API poll/read settings, intents, runs, orders, sessions, audit logs, risk state, and review queues.
+10. The execution boundary computes expected slippage/liquidity quality and blocks weak setups before broker submission.
+11. Operators review live intents when required, and the execution worker re-checks market hours, kill switch, broker connectivity, and live gates before broker submission.
+12. Filled/canceled/rejected outcomes feed persisted TCA analytics and symbol-level execution quality feedback.
+13. Filled exits generate post-trade reviews tied back to model/prompt lineage and update outcome-aware symbol cooldown state.
+14. The dashboard and API poll/read settings, intents, runs, orders, sessions, audit logs, risk state, review queues, and execution-quality analytics.
+15. Structured observability pipelines produce request/worker telemetry and operational alerts that are surfaced to operators.
 
 ## Documentation
 
@@ -115,6 +133,7 @@ No dependencies were installed and no services were started while creating this 
 - [Deployment notes](./docs/deployment.md)
 - [Operations runbook](./docs/operations.md)
 - [Expert upgrade roadmap](./docs/expert-upgrade-roadmap.md)
+- [Strategy change log](./docs/strategy-change-log.md)
 - [Production hardening plan](./docs/production-hardening-plan.md)
 
 ## Verification Performed
@@ -127,4 +146,4 @@ No dependencies were installed and no services were started while creating this 
 ## Notes
 
 - Some transient Python cache artifacts may exist from parse attempts that were blocked by the Windows sandbox; they are ignored by `.gitignore`.
-- The current repository now includes Phase 0-6 roadmap work, but it is still not a production-hardened trading system.
+- The current repository now includes Phase 0-9 roadmap work, but it is still not a production-hardened trading system.

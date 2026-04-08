@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from tradingbot.enums import OrderIntent, RiskDecision
 from tradingbot.models import BotSettings, PortfolioSnapshot, RiskEvent, SymbolCooldown, TradeReview
 from tradingbot.schemas.trading import CommitteeDecision, RiskCheckResult
+from tradingbot.services.alerts import AlertService
+from tradingbot.services.metrics import observe_counter
 
 SECTOR_BUCKETS: dict[str, str] = {
     "AAPL": "XLK",
@@ -149,10 +151,13 @@ class RiskEngine:
         loss_streak: int = 0,
         recent_execution_failures: int = 0,
         pretrade_notes: list[str] | None = None,
+        execution_quality_feedback: dict[str, Any] | None = None,
     ) -> RiskCheckResult:
         notes: list[str] = []
+        advisory_notes: list[str] = []
         feature_snapshot = feature_snapshot or {}
         structured_events = structured_events or []
+        execution_quality_feedback = execution_quality_feedback or {}
         normalized_positions = _normalize_positions(positions or [])
 
         if decision.direction != OrderIntent.BUY:
@@ -175,6 +180,29 @@ class RiskEngine:
         if recent_execution_failures >= self.policy.execution_failure_review_threshold:
             notes.append("Repeated execution failures require manual review before new entries.")
 
+        execution_feedback_scale = 1.0
+        if execution_quality_feedback:
+            execution_feedback_scale = max(
+                min(_as_float(execution_quality_feedback.get("size_scale"), fallback=1.0), 1.0),
+                0.0,
+            )
+            feedback_notes = [
+                str(item)
+                for item in execution_quality_feedback.get("notes", [])
+                if isinstance(item, str) and item.strip()
+            ]
+            if bool(execution_quality_feedback.get("block_new_entries")):
+                notes.append("Execution-quality feedback blocked new entries for this symbol.")
+                notes.extend(feedback_notes[:2])
+            elif execution_feedback_scale < 0.999:
+                advisory_notes.append(
+                    (
+                        "Execution-quality feedback applied a size throttle "
+                        f"(scale={round(execution_feedback_scale, 3)})."
+                    )
+                )
+                advisory_notes.extend(feedback_notes[:1])
+
         stop_distance = max(decision.entry - decision.stop_loss, 0.0)
         if stop_distance <= 0:
             notes.append("Stop loss must be below entry for long trades.")
@@ -192,7 +220,10 @@ class RiskEngine:
         confidence_scale = self._confidence_scale(decision.confidence)
         equity_curve_scale = self._equity_curve_scale(equity_drawdown_pct)
         streak_scale = self.policy.loss_streak_size_scale if loss_streak >= self.policy.loss_streak_reduction_threshold else 1.0
-        total_scale = max(0.05, volatility_scale * confidence_scale * equity_curve_scale * streak_scale)
+        total_scale = max(
+            0.05,
+            volatility_scale * confidence_scale * equity_curve_scale * streak_scale * max(execution_feedback_scale, 0.05),
+        )
         approved_quantity = int(base_quantity * total_scale)
         notional = approved_quantity * decision.entry
 
@@ -242,9 +273,10 @@ class RiskEngine:
                 (
                     f"Sizing scales applied: volatility={round(volatility_scale, 3)}, "
                     f"confidence={round(confidence_scale, 3)}, equity_curve={round(equity_curve_scale, 3)}, "
-                    f"loss_streak={round(streak_scale, 3)}."
+                    f"loss_streak={round(streak_scale, 3)}, execution_quality={round(execution_feedback_scale, 3)}."
                 ),
-            ],
+            ]
+            + advisory_notes,
         )
 
     def _volatility_scale(self, volatility_pct: float) -> float:
@@ -408,6 +440,14 @@ class PortfolioRiskService:
                 },
             )
         )
+        AlertService(self.session).notify_kill_switch(
+            source="risk_engine_auto",
+            details={
+                "severe_anomalies": runtime.severe_anomaly_count,
+                "threshold": self.policy.severe_anomaly_kill_switch_threshold,
+            },
+        )
+        observe_counter("risk.auto_kill_switch")
         return True
 
     def _equity_drawdown_pct(self, *, current_equity: float, now: datetime) -> float:

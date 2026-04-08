@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from time import perf_counter
 from typing import TYPE_CHECKING, Any, Iterable, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -10,6 +11,7 @@ from urllib.request import Request, urlopen
 
 from tradingbot.config import get_settings
 from tradingbot.enums import BrokerSlug, InstrumentClass, OrderIntent, OrderStatus, OrderType, TimeInForce, TradingMode
+from tradingbot.services.metrics import observe_counter, observe_duration_ms
 
 if TYPE_CHECKING:
     from tradingbot.models import BotSettings
@@ -55,6 +57,7 @@ class OrderRequest:
     take_profit: float | None = None
     trailing_percent: float | None = None
     trailing_amount: float | None = None
+    reference_price: float | None = None
     client_order_id: str | None = None
     allow_extended_hours: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -117,6 +120,46 @@ class BrokerPosition:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(slots=True)
+class LiquiditySnapshot:
+    symbol: str
+    bid_price: float | None
+    ask_price: float | None
+    bid_size: float | None
+    ask_size: float | None
+    last_price: float | None
+    as_of: datetime | None
+    venue: str | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def mid_price(self) -> float | None:
+        if self.bid_price is None or self.ask_price is None:
+            return self.last_price
+        if self.bid_price <= 0 or self.ask_price <= 0:
+            return self.last_price
+        return (self.bid_price + self.ask_price) / 2
+
+    @property
+    def spread(self) -> float | None:
+        if self.bid_price is None or self.ask_price is None:
+            return None
+        spread = self.ask_price - self.bid_price
+        return spread if spread >= 0 else None
+
+    @property
+    def spread_bps(self) -> float | None:
+        spread = self.spread
+        mid = self.mid_price
+        if spread is None or mid is None or mid <= 0:
+            return None
+        return (spread / mid) * 10_000
+
+    @property
+    def quoted_depth(self) -> float:
+        return max(_to_float(self.bid_size), 0.0) + max(_to_float(self.ask_size), 0.0)
+
+
 class BrokerAPIError(RuntimeError):
     def __init__(
         self,
@@ -176,6 +219,9 @@ class ExecutionAdapter(Protocol):
     ) -> list[BrokerFill]:
         ...
 
+    def get_liquidity_snapshot(self, symbol: str) -> LiquiditySnapshot | None:
+        ...
+
 
 class MarketDataAdapter(Protocol):
     def get_intraday_bars(
@@ -232,20 +278,40 @@ class AlpacaRESTMixin:
                 "Accept": "application/json",
             },
         )
+        started = perf_counter()
+        method_tag = method.upper().strip() or "GET"
         try:
             with urlopen(request, timeout=20) as response:
                 payload = response.read().decode("utf-8")
+                observe_counter(
+                    "external.alpaca.requests",
+                    tags={"method": method_tag, "path": path, "status": "success"},
+                )
                 return json.loads(payload) if payload else {}
         except HTTPError as exc:
             payload_text = exc.read().decode("utf-8", errors="ignore")
             payload_json = _safe_json(payload_text)
+            observe_counter(
+                "external.alpaca.requests",
+                tags={"method": method_tag, "path": path, "status": "error", "code": str(exc.code)},
+            )
             raise _normalize_alpaca_error(exc.code, payload_json or {"message": payload_text}) from exc
         except URLError as exc:
+            observe_counter(
+                "external.alpaca.requests",
+                tags={"method": method_tag, "path": path, "status": "error", "code": "url_error"},
+            )
             raise BrokerAPIError(
                 f"Failed to reach Alpaca API: {exc.reason}",
                 category="connectivity",
                 retryable=True,
             ) from exc
+        finally:
+            observe_duration_ms(
+                "external.alpaca.latency_ms",
+                duration_ms=(perf_counter() - started) * 1000,
+                tags={"method": method_tag, "path": path},
+            )
 
 
 class AlpacaExecutionAdapter(AlpacaRESTMixin):
@@ -425,6 +491,45 @@ class AlpacaExecutionAdapter(AlpacaRESTMixin):
                 )
             )
         return fills
+
+    def get_liquidity_snapshot(self, symbol: str) -> LiquiditySnapshot | None:
+        normalized_symbol = symbol.upper().strip()
+        if not normalized_symbol:
+            return None
+
+        params = {
+            "symbols": normalized_symbol,
+            "feed": self.settings.alpaca_market_data_feed,
+        }
+        try:
+            quote_payload = self._request_json(self.settings.alpaca_data_base_url, "/v2/stocks/quotes/latest", params=params)
+        except BrokerAPIError:
+            return None
+
+        quotes = quote_payload.get("quotes", {}) if isinstance(quote_payload, dict) else {}
+        quote = quotes.get(normalized_symbol) if isinstance(quotes, dict) else None
+        if not isinstance(quote, dict):
+            return None
+
+        trade_payload: dict[str, Any] = {}
+        try:
+            trade_payload = self._request_json(self.settings.alpaca_data_base_url, "/v2/stocks/trades/latest", params=params)
+        except BrokerAPIError:
+            trade_payload = {}
+        trades = trade_payload.get("trades", {}) if isinstance(trade_payload, dict) else {}
+        trade = trades.get(normalized_symbol) if isinstance(trades, dict) else {}
+
+        return LiquiditySnapshot(
+            symbol=normalized_symbol,
+            bid_price=_to_float(quote.get("bp"), fallback=0) or None,
+            ask_price=_to_float(quote.get("ap"), fallback=0) or None,
+            bid_size=_to_float(quote.get("bs"), fallback=0) or None,
+            ask_size=_to_float(quote.get("as"), fallback=0) or None,
+            last_price=_to_float(trade.get("p"), fallback=0) or None,
+            as_of=_to_datetime(quote.get("t") or trade.get("t")),
+            venue=str(quote.get("ax") or quote.get("bx") or "").strip() or None,
+            raw={"quote": quote, "trade": trade if isinstance(trade, dict) else {}},
+        )
 
 
 class AlpacaMarketDataAdapter(AlpacaRESTMixin):

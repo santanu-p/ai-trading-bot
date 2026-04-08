@@ -8,6 +8,8 @@ import type {
   BotSettingsUpdatePayload,
   BotSettingsResponse,
   CommitteeDecision,
+  ExecutionQualitySampleResponse,
+  ExecutionQualitySummaryResponse,
   ExecutionIntentResponse,
   LiveEnablePrepareResponse,
   LoginResponse,
@@ -18,6 +20,8 @@ import type {
   ReconciliationMismatchResponse,
   RiskEventResponse,
   SessionResponse,
+  OrderStatus,
+  PerformanceSummaryResponse,
   TimeInForce,
   RunResponse
 } from "@/lib/contracts";
@@ -179,6 +183,37 @@ export async function listPositions() {
 
 export async function listRiskEvents() {
   return request<RiskEventResponse[]>("/risk-events?limit=12");
+}
+
+export async function listAlerts(limit = 24) {
+  return request<RiskEventResponse[]>(`/alerts?limit=${String(limit)}`);
+}
+
+export async function getPerformanceSummary(windowMinutes = 60) {
+  return request<PerformanceSummaryResponse>(`/performance/summary?window_minutes=${String(windowMinutes)}`);
+}
+
+export async function listExecutionQualitySamples(
+  symbol?: string,
+  outcomeStatus?: OrderStatus,
+  limit = 20
+) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (symbol) {
+    params.set("symbol", symbol.toUpperCase());
+  }
+  if (outcomeStatus) {
+    params.set("outcome_status", outcomeStatus);
+  }
+  return request<ExecutionQualitySampleResponse[]>(`/execution-quality/samples?${params.toString()}`);
+}
+
+export async function listExecutionQualitySummary(
+  dimension: "symbol" | "venue" | "broker" | "order_type" = "symbol",
+  limit = 10
+) {
+  const params = new URLSearchParams({ dimension, limit: String(limit) });
+  return request<ExecutionQualitySummaryResponse[]>(`/execution-quality/summary?${params.toString()}`);
 }
 
 export async function listAuditLogs(limit = 20) {

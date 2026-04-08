@@ -62,6 +62,11 @@ Returns the current authenticated operator identity (`email`, `role`, `expires_a
 
 Simple health probe.
 
+## Observability Headers
+
+- API responses now include `x-request-id`.
+- Clients may also provide `x-request-id` on inbound requests to preserve upstream correlation IDs.
+
 ## Settings
 
 ### `GET /settings`
@@ -221,6 +226,73 @@ Returns risk and failure events.
 
 Phase 5 adds `agent_output_malformed` and recurring `trade_review_pattern` events.
 Phase 6 adds `auto_kill_switch` when severe anomaly clustering triggers an automatic safety halt.
+Phase 7 adds execution-quality guardrail events such as `execution_quality_rejected`, `execution_feedback_rejected`, and `execution_quality_capture_failed`.
+
+## Observability And Alerts
+
+### `GET /alerts`
+
+Returns operational alert events (`alert_*` codes) derived from runtime conditions.
+
+Query params:
+
+- `limit`
+
+Examples include:
+
+- `alert_worker_failures`
+- `alert_high_rejection_rate`
+- `alert_malformed_outputs`
+- `alert_kill_switch_activated`
+- `alert_reconciliation_unresolved`
+
+### `GET /performance/summary`
+
+Returns aggregated in-process counters and latency distributions plus decision-quality pressure signals.
+
+Query params:
+
+- `window_minutes`
+
+Response includes:
+
+- total and rejected trade-candidate counts with rejection rate
+- malformed-output and scan-failure counts
+- kill-switch/live state snapshot
+- counter metrics with tag dimensions
+- latency metrics with average, p95, max, and sample count
+
+## Execution Quality And TCA
+
+### `GET /execution-quality/samples`
+
+Returns persisted per-order execution-quality samples.
+
+Query params:
+
+- `symbol` (optional)
+- `outcome_status` (optional: `filled`, `canceled`, `rejected`, etc.)
+- `limit`
+
+Each sample includes:
+
+- intended vs realized price
+- expected and realized slippage
+- expected spread and spread-cost estimate
+- fill ratio and time-to-fill
+- aggressiveness tag and quality score
+- broker/venue/order-type dimensions
+
+### `GET /execution-quality/summary`
+
+Returns grouped TCA summaries.
+
+Query params:
+
+- `dimension` (`symbol`, `venue`, `broker`, `order_type`)
+- `limit`
+
+Each summary includes sample count, fill/reject/cancel rates, average slippage, average spread cost, average time-to-fill, and average execution quality score.
 
 ## Trade Reviews
 

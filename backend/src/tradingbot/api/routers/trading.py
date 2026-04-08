@@ -4,18 +4,19 @@ from datetime import UTC, datetime, timedelta
 from secrets import randbelow
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tradingbot.api.dependencies import CurrentActor, db_session_dependency, get_current_operator, require_roles
 from tradingbot.config import get_settings
-from tradingbot.enums import BotStatus, ExecutionIntentStatus, OperatorRole, TradingMode
+from tradingbot.enums import BotStatus, ExecutionIntentStatus, OperatorRole, OrderStatus, TradingMode
 from tradingbot.models import (
     AgentRun,
     AuditLog,
     BacktestReport,
     BacktestTrade,
     BotSettings,
+    ExecutionQualitySample,
     ExecutionIntent,
     OrderFill,
     OrderRecord,
@@ -39,6 +40,10 @@ from tradingbot.schemas.trading import (
     CommitteeDecision,
     CurrentOperatorResponse,
     ExecutionIntentResponse,
+    ExecutionQualitySampleResponse,
+    ExecutionQualitySummaryResponse,
+    MetricCounterResponse,
+    MetricLatencyResponse,
     FlattenResponse,
     LiveEnablePrepareResponse,
     LiveEnableRequest,
@@ -46,6 +51,7 @@ from tradingbot.schemas.trading import (
     OrderReplaceRequest,
     OrderResponse,
     OrderTransitionResponse,
+    PerformanceSummaryResponse,
     PositionResponse,
     ReconciliationMismatchResponse,
     RiskEventResponse,
@@ -54,8 +60,10 @@ from tradingbot.schemas.trading import (
     TradeReviewSummaryResponse,
 )
 from tradingbot.services.adapters import ReplaceOrderRequest, build_broker_adapter
+from tradingbot.services.alerts import AlertService, settings_alert_snapshot
 from tradingbot.services.evaluation import TradeReviewService
 from tradingbot.services.execution import ExecutionService
+from tradingbot.services.metrics import metrics_registry
 from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.store import ensure_bot_settings, live_trading_env_allowed, resolve_execution_support, strategy_profile_completed
 from tradingbot.security import hash_password, verify_password
@@ -219,6 +227,10 @@ def toggle_kill_switch(
     settings_row.kill_switch_enabled = enabled
     if enabled:
         settings_row.live_enabled = False
+        AlertService(session).notify_kill_switch(
+            source="api_toggle",
+            details={"actor": current.email, "actor_role": current.role.value},
+        )
     session.add(
         AuditLog(
             action="bot.kill_switch",
@@ -344,6 +356,10 @@ def broker_kill(
         actor=current.email,
         actor_role=current.role.value,
         session_id=current.session_id,
+    )
+    AlertService(session).notify_kill_switch(
+        source="broker_kill",
+        details={"actor": current.email, "actor_role": current.role.value, "canceled_orders": canceled_orders},
     )
     session.commit()
     return ActionResponse(detail=f"Broker kill activated. Canceled {canceled_orders} open orders.")
@@ -581,6 +597,137 @@ def list_risk_events(
     return [RiskEventResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
+@router.get("/alerts", response_model=list[RiskEventResponse])
+def list_alerts(
+    limit: int = Query(default=50, ge=1, le=500),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> list[RiskEventResponse]:
+    rows = AlertService(session).recent_alerts(limit=limit)
+    return [RiskEventResponse.model_validate(row, from_attributes=True) for row in rows]
+
+
+@router.get("/performance/summary", response_model=PerformanceSummaryResponse)
+def get_performance_summary(
+    window_minutes: int = Query(default=60, ge=5, le=24 * 60),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> PerformanceSummaryResponse:
+    counters, latencies = metrics_registry().summarize(window_minutes=window_minutes)
+    cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
+
+    total_candidates = session.scalar(
+        select(func.count()).select_from(TradeCandidate).where(TradeCandidate.created_at >= cutoff)
+    )
+    rejected_candidates = session.scalar(
+        select(func.count())
+        .select_from(TradeCandidate)
+        .where(TradeCandidate.created_at >= cutoff)
+        .where(TradeCandidate.status != "approved")
+    )
+    malformed_events = session.scalar(
+        select(func.count())
+        .select_from(RiskEvent)
+        .where(RiskEvent.created_at >= cutoff)
+        .where(RiskEvent.code == "agent_output_malformed")
+    )
+    scan_failures = session.scalar(
+        select(func.count())
+        .select_from(RiskEvent)
+        .where(RiskEvent.created_at >= cutoff)
+        .where(RiskEvent.code == "scan_failure")
+    )
+
+    total_count = int(total_candidates or 0)
+    rejected_count = int(rejected_candidates or 0)
+    state = settings_alert_snapshot(session)
+    return PerformanceSummaryResponse(
+        window_minutes=window_minutes,
+        total_trade_candidates=total_count,
+        rejected_trade_candidates=rejected_count,
+        rejection_rate=(rejected_count / max(total_count, 1)) if total_count else 0.0,
+        malformed_events=int(malformed_events or 0),
+        scan_failures=int(scan_failures or 0),
+        kill_switch_enabled=bool(state["kill_switch_enabled"]),
+        live_enabled=bool(state["live_enabled"]),
+        mode=TradingMode(str(state["mode"])),
+        counters=[
+            MetricCounterResponse(name=item.name, value=item.value, tags=item.tags)
+            for item in counters
+        ],
+        latencies=[
+            MetricLatencyResponse(
+                name=item.name,
+                samples=item.samples,
+                avg_ms=item.avg_ms,
+                p95_ms=item.p95_ms,
+                max_ms=item.max_ms,
+                tags=item.tags,
+            )
+            for item in latencies
+        ],
+    )
+
+
+@router.get("/execution-quality/samples", response_model=list[ExecutionQualitySampleResponse])
+def list_execution_quality_samples(
+    symbol: str | None = None,
+    outcome_status: OrderStatus | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> list[ExecutionQualitySampleResponse]:
+    query = select(ExecutionQualitySample).order_by(ExecutionQualitySample.created_at.desc())
+    if symbol:
+        query = query.where(ExecutionQualitySample.symbol == symbol.upper().strip())
+    if outcome_status is not None:
+        query = query.where(ExecutionQualitySample.outcome_status == outcome_status)
+    rows = session.scalars(query.limit(limit)).all()
+    return [
+        ExecutionQualitySampleResponse(
+            id=row.id,
+            order_id=row.order_id,
+            symbol=row.symbol,
+            broker_slug=row.broker_slug.value,
+            venue=row.venue,
+            order_type=row.order_type,
+            side=row.side,
+            outcome_status=row.outcome_status,
+            quantity=row.quantity,
+            filled_quantity=row.filled_quantity,
+            fill_ratio=row.fill_ratio,
+            intended_price=row.intended_price,
+            realized_price=row.realized_price,
+            expected_slippage_bps=row.expected_slippage_bps,
+            realized_slippage_bps=row.realized_slippage_bps,
+            expected_spread_bps=row.expected_spread_bps,
+            spread_cost=row.spread_cost,
+            notional=row.notional,
+            time_to_fill_seconds=row.time_to_fill_seconds,
+            aggressiveness=row.aggressiveness,
+            quality_score=row.quality_score,
+            payload=row.payload,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/execution-quality/summary", response_model=list[ExecutionQualitySummaryResponse])
+def summarize_execution_quality(
+    dimension: str = Query(default="symbol", pattern="^(symbol|venue|broker|order_type)$"),
+    limit: int = Query(default=20, ge=1, le=200),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> list[ExecutionQualitySummaryResponse]:
+    _, execution = _build_execution_service(session)
+    try:
+        rows = execution.execution_quality_summary(dimension=dimension, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return [ExecutionQualitySummaryResponse.model_validate(item) for item in rows]
+
+
 @router.get("/trade-reviews", response_model=list[TradeReviewResponse])
 def list_trade_reviews(
     status: str | None = None,
@@ -677,6 +824,14 @@ def run_reconciliation_now(
         adapter=execution.broker,
     )
     report = service.reconcile()
+    alerts = AlertService(session)
+    alerts.evaluate_runtime_alerts()
+    if report.live_paused:
+        alerts.notify_reconciliation_unresolved(
+            unresolved_mismatches=report.unresolved_mismatches,
+            source="api_reconciliation",
+            details={"mismatches_created": report.mismatches_created},
+        )
     session.add(
         AuditLog(
             action="reconciliation.run",

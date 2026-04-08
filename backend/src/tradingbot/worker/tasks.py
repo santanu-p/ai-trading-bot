@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from time import perf_counter
 from typing import Any
 
 from celery.result import AsyncResult
@@ -23,6 +24,7 @@ from tradingbot.models import (
 from tradingbot.schemas.trading import BacktestRequest, CommitteeDecision, RiskCheckResult
 from tradingbot.services.adapters import build_broker_adapter, build_market_data_adapter, build_news_adapter
 from tradingbot.services.agents import AgentOutputError, AgentRunner
+from tradingbot.services.alerts import AlertService
 from tradingbot.services.backtest import BacktestService, BacktestSimulationConfig
 from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.committee import CommitteeService
@@ -30,6 +32,8 @@ from tradingbot.services.data_quality import DataQualityPolicy, DataQualityValid
 from tradingbot.services.events import extract_structured_events, serialize_structured_events
 from tradingbot.services.execution import ExecutionService
 from tradingbot.services.features import IndexContext, build_feature_snapshot, infer_market_index_context
+from tradingbot.services.metrics import observe_counter, observe_duration_ms
+from tradingbot.services.observability import bind_run_id
 from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.risk import PortfolioRiskService, PositionExposure, RiskEngine, RiskPolicy
 from tradingbot.services.store import (
@@ -127,6 +131,30 @@ def _agent_rejection_decision(
     )
 
 
+def _execution_quality_rejection_decision(
+    *,
+    symbol: str,
+    feature_snapshot: dict[str, float],
+    notes: list[str],
+) -> CommitteeDecision:
+    reference = max(feature_snapshot.get("last_close", 0.0), 0.01)
+    return CommitteeDecision(
+        symbol=symbol,
+        direction=OrderIntent.HOLD,
+        confidence=0.0,
+        entry=round(reference, 4),
+        stop_loss=round(max(reference * 0.995, 0.01), 4),
+        take_profit=round(reference * 1.005, 4),
+        time_horizon="intraday",
+        status=RiskDecision.REJECTED,
+        thesis="Trade rejected before committee inference due to persistently poor execution-quality outcomes.",
+        reject_reason="; ".join(notes),
+        market_vote="reject",
+        news_vote="reject",
+        risk_notes=notes,
+    )
+
+
 def _decision_payload(
     *,
     decision: CommitteeDecision,
@@ -156,6 +184,8 @@ def enqueue_backtest(payload: BacktestRequest, report_id: str) -> AsyncResult:
 
 @celery_app.task(name="tradingbot.worker.tasks.run_market_scan")
 def run_market_scan() -> dict[str, int]:
+    started = perf_counter()
+    observe_counter("worker.market_scan.invocations")
     settings = get_settings()
     session = get_session_factory()()
     try:
@@ -391,6 +421,63 @@ def run_market_scan() -> dict[str, int]:
                         )
                     )
                     session.commit()
+                    observe_counter("decision.rejected", tags={"reason": "data_quality"})
+                    continue
+
+                execution_feedback = execution.execution_feedback_for_symbol(item.symbol)
+                if bool(execution_feedback.get("block_new_entries")):
+                    rejection_notes = [
+                        str(note)
+                        for note in execution_feedback.get("notes", [])
+                        if isinstance(note, str) and note.strip()
+                    ]
+                    if not rejection_notes:
+                        rejection_notes = [
+                            "Execution-quality feedback blocked new entries for this symbol.",
+                        ]
+                    execution_reject = _execution_quality_rejection_decision(
+                        symbol=item.symbol,
+                        feature_snapshot=feature_snapshot,
+                        notes=rejection_notes,
+                    )
+                    execution_payload = _decision_payload(
+                        decision=execution_reject,
+                        feature_snapshot=feature_snapshot,
+                        data_quality_payload=quality_report.to_payload(),
+                        data_timestamps=quality_report.data_timestamps,
+                        structured_events=structured_event_payload,
+                        index_context=index_context,
+                        committee_metadata={"execution_feedback": execution_feedback},
+                    )
+                    session.add(
+                        TradeCandidate(
+                            run_id=run.id,
+                            symbol=execution_reject.symbol,
+                            direction=execution_reject.direction,
+                            confidence=execution_reject.confidence,
+                            status=execution_reject.status.value,
+                            thesis=execution_reject.thesis,
+                            entry=execution_reject.entry,
+                            stop_loss=execution_reject.stop_loss,
+                            take_profit=execution_reject.take_profit,
+                            risk_notes=execution_reject.risk_notes,
+                            raw_payload=execution_payload,
+                        )
+                    )
+                    run.status = RunStatus.SUCCEEDED
+                    run.finished_at = datetime.now(UTC)
+                    run.decision_payload = execution_payload
+                    session.add(
+                        RiskEvent(
+                            symbol=item.symbol,
+                            severity="warning",
+                            code="execution_feedback_rejected",
+                            message="Symbol rejected before committee inference due to poor recent execution outcomes.",
+                            payload={"feedback": execution_feedback, "notes": rejection_notes},
+                        )
+                    )
+                    session.commit()
+                    observe_counter("decision.rejected", tags={"reason": "execution_feedback"})
                     continue
 
                 portfolio_context = {
@@ -409,16 +496,18 @@ def run_market_scan() -> dict[str, int]:
                         }
                         for position in broker_positions[:10]
                     ],
+                    "execution_quality": execution_feedback,
                 }
-                committee_result = agent_runner.run_structured_committee(
-                    symbol=item.symbol,
-                    trading_profile=trading_profile,
-                    feature_snapshot=feature_snapshot,
-                    news_items=news,
-                    structured_events=structured_event_payload,
-                    data_quality=quality_report.to_payload(),
-                    portfolio_context=portfolio_context,
-                )
+                with bind_run_id(run.id):
+                    committee_result = agent_runner.run_structured_committee(
+                        symbol=item.symbol,
+                        trading_profile=trading_profile,
+                        feature_snapshot=feature_snapshot,
+                        news_items=news,
+                        structured_events=structured_event_payload,
+                        data_quality=quality_report.to_payload(),
+                        portfolio_context=portfolio_context,
+                    )
                 run.model_name = committee_result.model_name
                 run.prompt_versions_json = committee_result.prompt_versions
                 run.input_snapshot_json = committee_result.shared_input_snapshot
@@ -455,6 +544,7 @@ def run_market_scan() -> dict[str, int]:
                         loss_streak=runtime_metrics.loss_streak,
                         recent_execution_failures=runtime_metrics.recent_execution_failures,
                         pretrade_notes=cooldown_notes,
+                        execution_quality_feedback=execution_feedback,
                     )
                 decision = committee.finalize(proposal, risk_result=risk_result)
                 decision_payload = _decision_payload(
@@ -509,6 +599,7 @@ def run_market_scan() -> dict[str, int]:
                         )
                     )
                     queued += 1
+                    observe_counter("decision.approved")
                 else:
                     session.add(
                         RiskEvent(
@@ -519,6 +610,7 @@ def run_market_scan() -> dict[str, int]:
                             payload={"notes": decision.risk_notes},
                         )
                     )
+                    observe_counter("decision.rejected", tags={"reason": "risk_or_committee"})
                     session.commit()
             except AgentOutputError as exc:
                 rejection_notes = [
@@ -578,6 +670,7 @@ def run_market_scan() -> dict[str, int]:
                         payload={"role": exc.role, "invocation": exc.invocation.to_payload()},
                     )
                 )
+                observe_counter("agent.output_malformed")
                 session.commit()
             except Exception as exc:  # noqa: BLE001
                 run.status = RunStatus.FAILED
@@ -592,22 +685,32 @@ def run_market_scan() -> dict[str, int]:
                         payload={"error": str(exc)},
                     )
                 )
+                observe_counter("worker.market_scan.symbol_failures")
                 session.commit()
 
         repaired_children = execution.repair_broken_child_orders()
         post_report = reconciliation.reconcile()
+        AlertService(session).evaluate_runtime_alerts()
+        session.commit()
 
+        observe_counter("worker.market_scan.completed")
         return {
             "queued": queued,
             "repaired_children": repaired_children,
             "unresolved_mismatches": post_report.unresolved_mismatches,
         }
+    except Exception:
+        observe_counter("worker.market_scan.failures")
+        raise
     finally:
+        observe_duration_ms("worker.market_scan.latency_ms", duration_ms=(perf_counter() - started) * 1000)
         session.close()
 
 
 @celery_app.task(name="tradingbot.worker.tasks.run_reconciliation")
 def run_reconciliation() -> dict[str, int]:
+    started = perf_counter()
+    observe_counter("worker.reconciliation.invocations")
     session = get_session_factory()()
     try:
         settings_row = ensure_bot_settings(session)
@@ -620,6 +723,9 @@ def run_reconciliation() -> dict[str, int]:
             adapter=broker,
         )
         report = service.reconcile()
+        AlertService(session).evaluate_runtime_alerts()
+        session.commit()
+        observe_counter("worker.reconciliation.completed")
         return {
             "transitions_applied": report.transitions_applied,
             "fills_ingested": report.fills_ingested,
@@ -627,12 +733,18 @@ def run_reconciliation() -> dict[str, int]:
             "unresolved_mismatches": report.unresolved_mismatches,
             "live_paused": int(report.live_paused),
         }
+    except Exception:
+        observe_counter("worker.reconciliation.failures")
+        raise
     finally:
+        observe_duration_ms("worker.reconciliation.latency_ms", duration_ms=(perf_counter() - started) * 1000)
         session.close()
 
 
 @celery_app.task(name="tradingbot.worker.tasks.run_backtest")
 def run_backtest(payload: dict) -> dict[str, int]:
+    started = perf_counter()
+    observe_counter("worker.backtest.invocations")
     request = BacktestRequest.model_validate(payload)
     report_id = str(payload.get("report_id", "")).strip() or None
     session = get_session_factory()()
@@ -730,8 +842,10 @@ def run_backtest(payload: dict) -> dict[str, int]:
                 )
             )
         session.commit()
+        observe_counter("worker.backtest.completed")
         return {"runs": report.total_trades, "rejected_orders": report.rejected_orders}
     except Exception as exc:  # noqa: BLE001
+        observe_counter("worker.backtest.failures")
         if report_id:
             report = session.get(BacktestReport, report_id)
             if report is not None:
@@ -741,4 +855,5 @@ def run_backtest(payload: dict) -> dict[str, int]:
                 session.commit()
         raise
     finally:
+        observe_duration_ms("worker.backtest.latency_ms", duration_ms=(perf_counter() - started) * 1000)
         session.close()

@@ -112,6 +112,8 @@ class PreTradeValidator:
 
 
 def _reference_price(order: OrderRequest) -> float:
+    if order.reference_price is not None:
+        return float(order.reference_price)
     if order.limit_price is not None:
         return float(order.limit_price)
     if order.stop_price is not None:

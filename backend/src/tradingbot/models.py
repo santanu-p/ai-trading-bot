@@ -428,6 +428,33 @@ class TradeReview(Base, TimestampMixin):
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
+class ExecutionQualitySample(Base, TimestampMixin):
+    __tablename__ = "execution_quality_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), nullable=False, unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    broker_slug: Mapped[BrokerSlug] = mapped_column(Enum(BrokerSlug), nullable=False, index=True)
+    venue: Mapped[str] = mapped_column(String(80), nullable=False, default="unknown", index=True)
+    order_type: Mapped[OrderType] = mapped_column(Enum(OrderType), nullable=False, index=True)
+    side: Mapped[OrderIntent] = mapped_column(Enum(OrderIntent), nullable=False)
+    outcome_status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), nullable=False, index=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    filled_quantity: Mapped[int] = mapped_column(Integer, default=0)
+    fill_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    intended_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    realized_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_slippage_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    realized_slippage_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    expected_spread_bps: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spread_cost: Mapped[float] = mapped_column(Float, default=0.0)
+    notional: Mapped[float] = mapped_column(Float, default=0.0)
+    time_to_fill_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    aggressiveness: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    quality_score: Mapped[float] = mapped_column(Float, default=0.0)
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_logs"
 
