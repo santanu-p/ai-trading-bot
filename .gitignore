@@ -16,4 +16,4 @@ htmlcov/
 .env.local
 backend/.env
 web/.env.local
-.vscode/mcp.json
+.vscode/
