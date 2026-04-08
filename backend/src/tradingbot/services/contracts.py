@@ -106,6 +106,7 @@ class ContractMasterService:
         as_of_time = (as_of or datetime.now(UTC)).astimezone(UTC)
         normalized_symbol = symbol.upper().strip()
 
+        contract: InstrumentContract | None
         if instrument_class == InstrumentClass.CASH_EQUITY:
             contract = self.ensure_cash_equity_contract(normalized_symbol)
         else:

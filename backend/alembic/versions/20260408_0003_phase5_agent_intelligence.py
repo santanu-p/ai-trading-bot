@@ -49,8 +49,10 @@ def upgrade() -> None:
     op.create_index("ix_trade_reviews_loss_cause", "trade_reviews", ["loss_cause"], unique=False)
     op.create_index("ix_trade_reviews_recurring_pattern_key", "trade_reviews", ["recurring_pattern_key"], unique=False)
 
-    op.alter_column("agent_runs", "prompt_versions_json", server_default=None)
-    op.alter_column("agent_runs", "input_snapshot_json", server_default=None)
+    bind = op.get_bind()
+    if bind.dialect.name != "sqlite":
+        op.alter_column("agent_runs", "prompt_versions_json", server_default=None)
+        op.alter_column("agent_runs", "input_snapshot_json", server_default=None)
 
 
 def downgrade() -> None:

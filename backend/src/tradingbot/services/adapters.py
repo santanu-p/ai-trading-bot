@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import TYPE_CHECKING, Any, Iterable, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -267,13 +267,17 @@ class AlpacaRESTMixin:
     ) -> Any:
         query = f"?{urlencode(params, doseq=True)}" if params else ""
         data = json.dumps(body).encode("utf-8") if body is not None else None
+        api_key = self.settings.alpaca_api_key
+        api_secret = self.settings.alpaca_api_secret
+        if api_key is None or api_secret is None:
+            raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET must be configured.")
         request = Request(
             f"{base_url}{path}{query}",
             data=data,
             method=method,
             headers={
-                "APCA-API-KEY-ID": self.settings.alpaca_api_key,
-                "APCA-API-SECRET-KEY": self.settings.alpaca_api_secret,
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": api_secret,
                 "Content-Type": "application/json",
                 "Accept": "application/json",
             },
@@ -518,6 +522,7 @@ class AlpacaExecutionAdapter(AlpacaRESTMixin):
             trade_payload = {}
         trades = trade_payload.get("trades", {}) if isinstance(trade_payload, dict) else {}
         trade = trades.get(normalized_symbol) if isinstance(trades, dict) else {}
+        trade_dict = trade if isinstance(trade, dict) else {}
 
         return LiquiditySnapshot(
             symbol=normalized_symbol,
@@ -525,10 +530,10 @@ class AlpacaExecutionAdapter(AlpacaRESTMixin):
             ask_price=_to_float(quote.get("ap"), fallback=0) or None,
             bid_size=_to_float(quote.get("bs"), fallback=0) or None,
             ask_size=_to_float(quote.get("as"), fallback=0) or None,
-            last_price=_to_float(trade.get("p"), fallback=0) or None,
-            as_of=_to_datetime(quote.get("t") or trade.get("t")),
+            last_price=_to_float(trade_dict.get("p"), fallback=0) or None,
+            as_of=_to_datetime(quote.get("t") or trade_dict.get("t")),
             venue=str(quote.get("ax") or quote.get("bx") or "").strip() or None,
-            raw={"quote": quote, "trade": trade if isinstance(trade, dict) else {}},
+            raw={"quote": quote, "trade": trade_dict},
         )
 
 

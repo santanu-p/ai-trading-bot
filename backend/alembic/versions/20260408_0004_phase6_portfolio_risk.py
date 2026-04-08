@@ -89,26 +89,28 @@ def upgrade() -> None:
     op.create_index("ix_symbol_cooldowns_triggered_at", "symbol_cooldowns", ["triggered_at"], unique=False)
     op.create_index("ix_symbol_cooldowns_expires_at", "symbol_cooldowns", ["expires_at"], unique=False)
 
-    for column in (
-        "max_gross_exposure_pct",
-        "max_sector_exposure_pct",
-        "max_correlation_exposure_pct",
-        "max_event_cluster_positions",
-        "volatility_target_pct",
-        "atr_sizing_multiplier",
-        "equity_curve_throttle_start_pct",
-        "equity_curve_throttle_min_scale",
-        "intraday_drawdown_pause_pct",
-        "loss_streak_reduction_threshold",
-        "loss_streak_size_scale",
-        "execution_failure_review_threshold",
-        "severe_anomaly_kill_switch_threshold",
-        "symbol_cooldown_profit_minutes",
-        "symbol_cooldown_stopout_minutes",
-        "symbol_cooldown_event_minutes",
-        "symbol_cooldown_whipsaw_minutes",
-    ):
-        op.alter_column("bot_settings", column, server_default=None)
+    bind = op.get_bind()
+    if bind.dialect.name != "sqlite":
+        for column in (
+            "max_gross_exposure_pct",
+            "max_sector_exposure_pct",
+            "max_correlation_exposure_pct",
+            "max_event_cluster_positions",
+            "volatility_target_pct",
+            "atr_sizing_multiplier",
+            "equity_curve_throttle_start_pct",
+            "equity_curve_throttle_min_scale",
+            "intraday_drawdown_pause_pct",
+            "loss_streak_reduction_threshold",
+            "loss_streak_size_scale",
+            "execution_failure_review_threshold",
+            "severe_anomaly_kill_switch_threshold",
+            "symbol_cooldown_profit_minutes",
+            "symbol_cooldown_stopout_minutes",
+            "symbol_cooldown_event_minutes",
+            "symbol_cooldown_whipsaw_minutes",
+        ):
+            op.alter_column("bot_settings", column, server_default=None)
 
 
 def downgrade() -> None:

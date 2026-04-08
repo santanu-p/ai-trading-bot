@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from tradingbot.db import Base
-from tradingbot.enums import BrokerSlug, OrderIntent, OrderStatus, OrderType, RiskDecision, TimeInForce, TradingMode
+from tradingbot.enums import BrokerSlug, OrderIntent, OrderStatus, RiskDecision, TradingMode
 from tradingbot.schemas.settings import TradingProfile
 from tradingbot.schemas.trading import CommitteeDecision, RiskCheckResult
 from tradingbot.services.adapters import AccountSnapshot, BarPoint, BrokerFill, BrokerOrder, BrokerPosition, NewsItem, OrderRequest

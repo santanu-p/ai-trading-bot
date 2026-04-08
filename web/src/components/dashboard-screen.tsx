@@ -873,7 +873,7 @@ export function DashboardScreen({ section }: Props) {
               !settingsData ||
               !canOperate ||
               intakeRequired ||
-              Boolean(switchingToLive && !settingsData.live_start_allowed)
+              Boolean(switchingToLive && !settingsData?.live_start_allowed)
             }
             onClick={() =>
               handleCommand(() => switchMode(settingsData?.mode === "paper" ? "live" : "paper"), {
@@ -887,7 +887,7 @@ export function DashboardScreen({ section }: Props) {
             className="ghost-button"
             disabled={busy || !settingsData || !canOperate}
             onClick={() =>
-              handleCommand(() => toggleKillSwitch(!settingsData.kill_switch_enabled), {
+              handleCommand(() => toggleKillSwitch(!(settingsData?.kill_switch_enabled ?? false)), {
                 success: "Kill switch updated."
               })
             }

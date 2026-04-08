@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 
@@ -44,15 +44,15 @@ class Settings:
     session_expire_minutes: int = _env_int("SESSION_EXPIRE_MINUTES", _env_int("JWT_EXPIRE_MINUTES", 720))
     session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "tradingbot_session")
     session_cookie_secure: bool = _env_bool("SESSION_COOKIE_SECURE", os.getenv("ENVIRONMENT", "development") != "development")
-    admin_email: str = os.getenv("ADMIN_EMAIL", "admin@example.com")
-    admin_password: str | None = os.getenv("ADMIN_PASSWORD")
-    admin_password_hash: str | None = os.getenv("ADMIN_PASSWORD_HASH")
-    operator_email: str | None = os.getenv("OPERATOR_EMAIL")
-    operator_password: str | None = os.getenv("OPERATOR_PASSWORD")
-    operator_password_hash: str | None = os.getenv("OPERATOR_PASSWORD_HASH")
-    reviewer_email: str | None = os.getenv("REVIEWER_EMAIL")
-    reviewer_password: str | None = os.getenv("REVIEWER_PASSWORD")
-    reviewer_password_hash: str | None = os.getenv("REVIEWER_PASSWORD_HASH")
+    admin_email: str = field(default_factory=lambda: os.getenv("ADMIN_EMAIL", "admin@example.com"))
+    admin_password: str | None = field(default_factory=lambda: os.getenv("ADMIN_PASSWORD"))
+    admin_password_hash: str | None = field(default_factory=lambda: os.getenv("ADMIN_PASSWORD_HASH"))
+    operator_email: str | None = field(default_factory=lambda: os.getenv("OPERATOR_EMAIL"))
+    operator_password: str | None = field(default_factory=lambda: os.getenv("OPERATOR_PASSWORD"))
+    operator_password_hash: str | None = field(default_factory=lambda: os.getenv("OPERATOR_PASSWORD_HASH"))
+    reviewer_email: str | None = field(default_factory=lambda: os.getenv("REVIEWER_EMAIL"))
+    reviewer_password: str | None = field(default_factory=lambda: os.getenv("REVIEWER_PASSWORD"))
+    reviewer_password_hash: str | None = field(default_factory=lambda: os.getenv("REVIEWER_PASSWORD_HASH"))
     web_origin: str = os.getenv("WEB_ORIGIN", "http://localhost:3000")
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_model: str = os.getenv("OPENAI_MODEL", "gpt-5-mini")

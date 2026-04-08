@@ -82,9 +82,9 @@ def get_backtest_report(
     report = session.get(BacktestReport, report_id)
     if report is None:
         raise HTTPException(status_code=404, detail=f"Backtest report {report_id} was not found.")
-    trades = session.scalars(
-        select(BacktestTrade).where(BacktestTrade.report_id == report_id).order_by(BacktestTrade.signal_at.desc())
-    ).all()
+    trades = list(
+        session.scalars(select(BacktestTrade).where(BacktestTrade.report_id == report_id).order_by(BacktestTrade.signal_at.desc())).all()
+    )
     return _serialize_backtest_detail(report, trades)
 
 

@@ -8,15 +8,17 @@ from typing import Any
 from tradingbot.config import get_settings
 from tradingbot.services.metrics import observe_counter, observe_duration_ms
 
+OpenAIClientImpl: Any | None
 try:
-    from openai import OpenAI
+    from openai import OpenAI as OpenAIClientImpl
 except Exception:  # pragma: no cover - optional dependency
-    OpenAI = None
+    OpenAIClientImpl = None
 
+_genai_module: Any | None
 try:
-    from google import genai
+    from google import genai as _genai_module
 except Exception:  # pragma: no cover - optional dependency
-    genai = None
+    _genai_module = None
 
 
 class LLMClient(ABC):
@@ -27,9 +29,9 @@ class LLMClient(ABC):
 
 class OpenAIClient(LLMClient):
     def __init__(self, api_key: str, model: str) -> None:
-        if OpenAI is None:
+        if OpenAIClientImpl is None:
             raise RuntimeError("openai is not installed. Install it to use OPENAI_API_KEY.")
-        self.client = OpenAI(api_key=api_key)
+        self.client = OpenAIClientImpl(api_key=api_key)
         self.model = model
 
     def complete_json(self, *, system_prompt: str, prompt_payload: dict[str, Any]) -> str:
@@ -55,9 +57,9 @@ class OpenAIClient(LLMClient):
 
 class GeminiClient(LLMClient):
     def __init__(self, api_key: str, model: str) -> None:
-        if genai is None:
+        if _genai_module is None:
             raise RuntimeError("google-genai is not installed. Install it to use GEMINI_API_KEY.")
-        self.client = genai.Client(api_key=api_key)
+        self.client = _genai_module.Client(api_key=api_key)
         self.model = model
 
     def complete_json(self, *, system_prompt: str, prompt_payload: dict[str, Any]) -> str:

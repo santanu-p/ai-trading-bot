@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from tradingbot.enums import OrderStatus, TradingMode
 from tradingbot.models import BotSettings, OrderFill, OrderRecord, ReconciliationMismatch, RiskEvent
-from tradingbot.services.adapters import BrokerAPIError, BrokerFill, BrokerOrder, ExecutionAdapter
+from tradingbot.services.adapters import BrokerAPIError, ExecutionAdapter
 from tradingbot.services.alerts import AlertService
 from tradingbot.services.execution import ExecutionService
 from tradingbot.services.metrics import observe_counter

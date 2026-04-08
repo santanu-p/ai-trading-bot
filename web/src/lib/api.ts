@@ -28,7 +28,7 @@ import type {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
-type JsonBody = Record<string, unknown> | undefined;
+type JsonBody = object | undefined;
 
 export class ApiError extends Error {
   status: number;
@@ -43,7 +43,7 @@ export class ApiError extends Error {
 async function request<T>(path: string, init?: RequestInit & { json?: JsonBody }): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
-  if (init?.json) {
+  if (init?.json !== undefined) {
     headers.set("Content-Type", "application/json");
   }
 
@@ -51,7 +51,7 @@ async function request<T>(path: string, init?: RequestInit & { json?: JsonBody }
     ...init,
     headers,
     credentials: "include",
-    body: init?.json ? JSON.stringify(init.json) : init?.body
+    body: init?.json !== undefined ? JSON.stringify(init.json) : init?.body
   });
 
   const contentType = response.headers.get("content-type") ?? "";
