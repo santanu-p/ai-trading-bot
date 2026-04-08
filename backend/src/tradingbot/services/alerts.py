@@ -73,7 +73,7 @@ class AlertService:
             .order_by(RiskEvent.created_at.desc())
             .limit(max(limit, 1))
         )
-        return self.session.scalars(query).all()
+        return list(self.session.scalars(query).all())
 
     def _alert_repeated_worker_failures(self, *, as_of: datetime) -> bool:
         window_start = as_of - timedelta(minutes=self.thresholds.worker_failure_window_minutes)

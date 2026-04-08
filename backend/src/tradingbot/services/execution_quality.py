@@ -206,9 +206,11 @@ class ExecutionQualityService:
     def upsert_order_sample(self, order: OrderRecord, *, fills: list[OrderFill] | None = None) -> ExecutionQualitySample:
         metadata = order.metadata_json or {}
         execution_payload = _execution_payload(metadata)
-        order_fills = fills if fills is not None else self.session.scalars(
+        order_fills = fills if fills is not None else list(
+            self.session.scalars(
             select(OrderFill).where(OrderFill.order_id == order.id).order_by(OrderFill.filled_at.asc())
-        ).all()
+            ).all()
+        )
 
         intended_price = _optional_float(execution_payload.get("intended_price"))
         if intended_price is None:
@@ -454,7 +456,7 @@ class ExecutionQualityService:
         query = select(ExecutionQualitySample).where(ExecutionQualitySample.created_at >= window_start)
         if symbol:
             query = query.where(ExecutionQualitySample.symbol == symbol)
-        return self.session.scalars(query.order_by(ExecutionQualitySample.created_at.desc()).limit(2000)).all()
+        return list(self.session.scalars(query.order_by(ExecutionQualitySample.created_at.desc()).limit(2000)).all())
 
     def _reference_price(self, intended_price: float, liquidity_snapshot: LiquiditySnapshot | None) -> float:
         if intended_price > 0:

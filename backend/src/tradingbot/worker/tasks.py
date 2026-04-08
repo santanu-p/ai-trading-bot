@@ -426,9 +426,11 @@ def run_market_scan() -> dict[str, int]:
 
                 execution_feedback = execution.execution_feedback_for_symbol(item.symbol)
                 if bool(execution_feedback.get("block_new_entries")):
+                    notes_payload = execution_feedback.get("notes")
+                    note_items = notes_payload if isinstance(notes_payload, list) else []
                     rejection_notes = [
                         str(note)
-                        for note in execution_feedback.get("notes", [])
+                        for note in note_items
                         if isinstance(note, str) and note.strip()
                     ]
                     if not rejection_notes:

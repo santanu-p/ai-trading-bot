@@ -229,23 +229,29 @@ class ExecutionService:
             instrument_class=settings_row.instrument_class,
         )
         if settings_row.kill_switch_enabled:
-            return self._block_intent(intent, "Kill switch is enabled.")
+            self._block_intent(intent, "Kill switch is enabled.")
+            return None
         if settings_row.mode != intent.mode:
-            return self._block_intent(intent, "Bot mode changed after the intent was approved.")
+            self._block_intent(intent, "Bot mode changed after the intent was approved.")
+            return None
         if intent.mode == TradingMode.LIVE and not settings_row.live_enabled:
-            return self._block_intent(intent, "Live execution is not enabled.")
+            self._block_intent(intent, "Live execution is not enabled.")
+            return None
         if intent.mode == TradingMode.LIVE:
             from tradingbot.services.store import live_trading_env_allowed
 
             if not live_trading_env_allowed(settings_row):
-                return self._block_intent(intent, "This environment is not allowlisted for live execution.")
+                self._block_intent(intent, "This environment is not allowlisted for live execution.")
+                return None
         if not session_state.can_submit_orders:
-            return self._block_intent(intent, session_state.reason or "Order submission is blocked outside session hours.")
+            self._block_intent(intent, session_state.reason or "Order submission is blocked outside session hours.")
+            return None
 
         try:
             self.broker.get_account_snapshot()
         except BrokerAPIError as exc:
-            return self._fail_intent(intent, f"Broker connectivity check failed: {exc}")
+            self._fail_intent(intent, f"Broker connectivity check failed: {exc}")
+            return None
 
         decision = CommitteeDecision.model_validate(intent.decision_payload)
         risk_result = RiskCheckResult.model_validate(intent.risk_payload)
@@ -263,7 +269,8 @@ class ExecutionService:
             execution_intent_id=intent.id,
         )
         if order is None or order.status == OrderStatus.REJECTED:
-            return self._fail_intent(intent, "Order submission did not complete successfully.")
+            self._fail_intent(intent, "Order submission did not complete successfully.")
+            return None
 
         intent.status = ExecutionIntentStatus.EXECUTED
         intent.executed_at = datetime.now(UTC)
@@ -731,18 +738,22 @@ class ExecutionService:
         return canceled_orders
 
     def list_order_transitions(self, order_id: int) -> list[OrderStateTransition]:
-        return self.session.scalars(
+        return list(
+            self.session.scalars(
             select(OrderStateTransition)
             .where(OrderStateTransition.order_id == order_id)
             .order_by(OrderStateTransition.transition_at.asc())
-        ).all()
+            ).all()
+        )
 
     def list_order_fills(self, order_id: int) -> list[OrderFill]:
-        return self.session.scalars(
+        return list(
+            self.session.scalars(
             select(OrderFill)
             .where(OrderFill.order_id == order_id)
             .order_by(OrderFill.filled_at.asc())
-        ).all()
+            ).all()
+        )
 
     def current_symbol_exposure(self, symbol: str) -> float:
         position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == symbol.upper().strip()))

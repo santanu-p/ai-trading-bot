@@ -230,12 +230,18 @@ def _decision_payload(parent: OrderRecord) -> dict[str, Any]:
 def _decision_entry(payload: dict[str, Any]) -> float | None:
     decision = payload.get("decision")
     if isinstance(decision, dict):
+        entry = decision.get("entry")
+        if entry is None:
+            return None
         try:
-            return float(decision.get("entry"))
+            return float(entry)
         except (TypeError, ValueError):
             return None
+    entry = payload.get("entry")
+    if entry is None:
+        return None
     try:
-        return float(payload.get("entry"))
+        return float(entry)
     except (TypeError, ValueError):
         return None
 

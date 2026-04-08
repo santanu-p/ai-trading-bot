@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
 from celery.result import AsyncResult
 
@@ -105,12 +106,12 @@ def _bars(symbol: str) -> list[BarPoint]:
     rows = _fixture_rows(f"backtest_bars_{symbol.lower()}.json")
     return [
         BarPoint(
-            timestamp=datetime.fromisoformat(item["timestamp"].replace("Z", "+00:00")),
-            open=float(item["open"]),
-            high=float(item["high"]),
-            low=float(item["low"]),
-            close=float(item["close"]),
-            volume=float(item["volume"]),
+            timestamp=datetime.fromisoformat(cast(str, item["timestamp"]).replace("Z", "+00:00")),
+            open=float(cast(str | float | int, item["open"])),
+            high=float(cast(str | float | int, item["high"])),
+            low=float(cast(str | float | int, item["low"])),
+            close=float(cast(str | float | int, item["close"])),
+            volume=float(cast(str | float | int, item["volume"])),
         )
         for item in rows
     ]
@@ -120,11 +121,11 @@ def _news(symbol: str) -> list[NewsItem]:
     rows = _fixture_rows(f"backtest_news_{symbol.lower()}.json")
     return [
         NewsItem(
-            headline=item["headline"],
-            summary=item["summary"],
-            source=item["source"],
-            created_at=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),
-            sentiment_hint=item["sentiment_hint"],
+            headline=cast(str, item["headline"]),
+            summary=cast(str, item["summary"]),
+            source=cast(str, item["source"]),
+            created_at=datetime.fromisoformat(cast(str, item["created_at"]).replace("Z", "+00:00")),
+            sentiment_hint=cast(str, item["sentiment_hint"]),
         )
         for item in rows
     ]
@@ -133,10 +134,14 @@ def _news(symbol: str) -> list[NewsItem]:
 def _expected_snapshot(symbol: str) -> dict[str, object] | None:
     if symbol != "AAPL":
         return None
-    return _fixture_rows("backtest_expected_snapshot.json")
+    return cast(dict[str, object], _fixture_payload("backtest_expected_snapshot.json"))
 
 
-def _fixture_rows(name: str) -> dict[str, object] | list[dict[str, object]]:
+def _fixture_rows(name: str) -> list[dict[str, object]]:
+    return cast(list[dict[str, object]], _fixture_payload(name))
+
+
+def _fixture_payload(name: str) -> object:
     return json.loads((FIXTURE_DIR / name).read_text(encoding="utf-8"))
 
 

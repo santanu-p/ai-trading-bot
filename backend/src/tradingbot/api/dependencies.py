@@ -94,7 +94,10 @@ def get_current_operator(
     session_row = session.get(OperatorSession, session_id)
     if session_row is None or session_row.revoked_at is not None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session has been revoked.")
-    if session_row.expires_at <= datetime.now(UTC):
+    expires_at = session_row.expires_at
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=UTC)
+    if expires_at <= datetime.now(UTC):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session has expired.")
 
     session_row.last_seen_at = datetime.now(UTC)
@@ -109,7 +112,7 @@ def get_current_operator(
         email=email,
         role=resolved_role,
         session_id=session_row.id,
-        expires_at=session_row.expires_at,
+        expires_at=expires_at,
     )
 
 

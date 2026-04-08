@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from tradingbot.api.dependencies import CurrentActor, db_session_dependency, get_current_operator, require_roles
 from tradingbot.config import get_settings
-from tradingbot.enums import BotStatus, ExecutionIntentStatus, OperatorRole, OrderStatus, TradingMode
+from tradingbot.enums import BotStatus, ExecutionIntentStatus, OperatorRole, OrderStatus, RiskDecision, TradingMode
 from tradingbot.models import (
     AgentRun,
     AuditLog,
@@ -339,7 +339,7 @@ def list_decisions(
             stop_loss=row.stop_loss,
             take_profit=row.take_profit,
             time_horizon="intraday",
-            status=row.status,
+            status=RiskDecision(row.status),
             thesis=row.thesis,
             risk_notes=row.risk_notes,
             market_vote=row.raw_payload.get("market_vote"),
@@ -596,7 +596,7 @@ def summarize_execution_quality(
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[ExecutionQualitySummaryResponse]:
-    _, execution = _build_execution_service(session)
+    _settings_row, execution = _build_execution_service(session)
     try:
         rows = execution.execution_quality_summary(dimension=dimension, limit=limit)
     except ValueError as exc:
@@ -731,5 +731,4 @@ def run_reconciliation_now(
         "unresolved_mismatches": report.unresolved_mismatches,
         "live_paused": int(report.live_paused),
     }
-
 
