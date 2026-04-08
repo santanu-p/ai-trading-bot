@@ -110,7 +110,7 @@ Operators can now filter these execution-quality panels by summary dimension (`s
 Risk now also includes a Phase 8 observability surface:
 
 - an operational alerts panel sourced from `alert_*` backend events
-- a performance snapshot panel with recent rejection pressure, malformed-output counts, scan-failure counts, and top latency/counter metrics
+- a performance snapshot panel with recent rejection pressure, malformed-output counts, scan-failure counts, portfolio position/exposure metrics, latest equity signals, and top latency/counter metrics
 
 Settings displays editable fields for all configurable guardrails and the watchlist plus live safety controls and session management.
 

@@ -1464,6 +1464,18 @@ export function DashboardScreen({ section }: Props) {
                       <span>Scan failures</span>
                       <strong>{performanceSummary.scan_failures}</strong>
                     </article>
+                    <article className="metric-block">
+                      <span>Positions</span>
+                      <strong>{performanceSummary.portfolio_position_count}</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Gross exposure</span>
+                      <strong>{currency(performanceSummary.portfolio_gross_exposure)}</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Latest equity</span>
+                      <strong>{currency(performanceSummary.latest_equity)}</strong>
+                    </article>
                   </div>
                   <table className="data-table">
                     <thead>

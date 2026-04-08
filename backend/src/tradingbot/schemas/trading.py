@@ -203,6 +203,13 @@ class PerformanceSummaryResponse(BaseModel):
     kill_switch_enabled: bool
     live_enabled: bool
     mode: TradingMode
+    portfolio_position_count: int = 0
+    portfolio_gross_exposure: float = 0.0
+    portfolio_net_exposure: float = 0.0
+    portfolio_largest_position_notional: float = 0.0
+    latest_equity: float = 0.0
+    latest_buying_power: float = 0.0
+    latest_daily_pl: float = 0.0
     counters: list[MetricCounterResponse] = Field(default_factory=list)
     latencies: list[MetricLatencyResponse] = Field(default_factory=list)
 

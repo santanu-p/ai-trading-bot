@@ -49,13 +49,12 @@ The biggest gaps are not UI polish. They are broker coverage, order lifecycle re
 
 ## Current Execution Reality
 
-The missing features that matter most right now are concrete:
+Current repo reality after Phases 0-9:
 
-- [adapters.py](../backend/src/tradingbot/services/adapters.py) only exposes a narrow Alpaca bracket-order path.
-- [execution.py](../backend/src/tradingbot/services/execution.py) assumes a simplified submit-and-persist flow rather than a full broker lifecycle.
-- [tasks.py](../backend/src/tradingbot/worker/tasks.py) both decides and executes in one pass, which is fragile for live trading.
-- [store.py](../backend/src/tradingbot/services/store.py) correctly blocks unsupported profile selections, but those selections are still not broker-backed.
-- There is no explicit support yet for partial fills, cancel/replace, child-order repair, reconciliation, broker streams, derivatives contracts, lot sizes, or multi-broker routing.
+- The core order lifecycle, reconciliation, execution-quality/TCA, observability, and release-discipline baselines are implemented.
+- Broker/profile capability gating is explicit, and unsupported selections are analysis-only by design.
+- Execution remains intentionally focused on the currently supported US cash-equity workflow; futures/options are not yet executable in this repo.
+- The largest remaining gaps are multi-market broker expansion, advanced operator analytics depth, realtime event streaming, and production hardening controls.
 
 ## Priority Order
 
@@ -871,6 +870,8 @@ High-value additions:
 - `backend/src/tradingbot/worker/replay_tasks.py`
 - `backend/tests/fixtures/`
 - `docs/strategy-change-log.md`
+
+Status: the files above now exist in the current repo.
 
 ## Must-Have Features Before Calling This A Real Auto-Trading Bot
 

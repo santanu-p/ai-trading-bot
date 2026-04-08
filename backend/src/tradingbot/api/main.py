@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from tradingbot.api.routers import auth, health, settings, trading
+from tradingbot.api.routers import auth, backtests, health, performance, settings, trading
 from tradingbot.config import get_settings
 from tradingbot.services.metrics import observe_counter, observe_duration_ms
 from tradingbot.services.observability import bind_request_id, configure_structured_logging
@@ -96,6 +96,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(health.router)
     app.include_router(settings.router)
+    app.include_router(performance.router)
+    app.include_router(backtests.router)
     app.include_router(trading.router)
     return app
 

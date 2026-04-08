@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from secrets import randbelow
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tradingbot.api.dependencies import CurrentActor, db_session_dependency, get_current_operator, require_roles
@@ -13,8 +13,6 @@ from tradingbot.enums import BotStatus, ExecutionIntentStatus, OperatorRole, Ord
 from tradingbot.models import (
     AgentRun,
     AuditLog,
-    BacktestReport,
-    BacktestTrade,
     BotSettings,
     ExecutionQualitySample,
     ExecutionIntent,
@@ -31,19 +29,12 @@ from tradingbot.schemas.settings import BotModeUpdate, BotStatusResponse
 from tradingbot.schemas.trading import (
     ActionResponse,
     AgentDecision,
-    BacktestDetailResponse,
     AuditLogResponse,
-    BacktestRequest,
-    BacktestResponse,
-    BacktestSummaryResponse,
-    BacktestTradeResponse,
     CommitteeDecision,
     CurrentOperatorResponse,
     ExecutionIntentResponse,
     ExecutionQualitySampleResponse,
     ExecutionQualitySummaryResponse,
-    MetricCounterResponse,
-    MetricLatencyResponse,
     FlattenResponse,
     LiveEnablePrepareResponse,
     LiveEnableRequest,
@@ -51,7 +42,6 @@ from tradingbot.schemas.trading import (
     OrderReplaceRequest,
     OrderResponse,
     OrderTransitionResponse,
-    PerformanceSummaryResponse,
     PositionResponse,
     ReconciliationMismatchResponse,
     RiskEventResponse,
@@ -60,15 +50,13 @@ from tradingbot.schemas.trading import (
     TradeReviewSummaryResponse,
 )
 from tradingbot.services.adapters import ReplaceOrderRequest, build_broker_adapter
-from tradingbot.services.alerts import AlertService, settings_alert_snapshot
+from tradingbot.services.alerts import AlertService
 from tradingbot.services.evaluation import TradeReviewService
 from tradingbot.services.execution import ExecutionService
-from tradingbot.services.metrics import metrics_registry
 from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.store import ensure_bot_settings, live_trading_env_allowed, resolve_execution_support, strategy_profile_completed
 from tradingbot.security import hash_password, verify_password
 from tradingbot.worker.execution_tasks import enqueue_execution_intent
-from tradingbot.worker.tasks import enqueue_backtest
 
 router = APIRouter(tags=["trading"])
 
@@ -94,46 +82,6 @@ def _build_replace_request(payload: OrderReplaceRequest) -> ReplaceOrderRequest:
         stop_price=payload.stop_price,
         take_profit=payload.take_profit,
         time_in_force=payload.time_in_force,
-    )
-
-
-def _serialize_backtest_summary(row: BacktestReport) -> BacktestSummaryResponse:
-    return BacktestSummaryResponse(
-        id=row.id,
-        task_id=row.task_id,
-        status=row.status,
-        symbols=row.symbols,
-        start_at=row.start_at,
-        end_at=row.end_at,
-        interval_minutes=row.interval_minutes,
-        created_at=row.created_at,
-        started_at=row.started_at,
-        finished_at=row.finished_at,
-        total_trades=row.total_trades,
-        rejected_orders=row.rejected_orders,
-        final_equity=row.final_equity,
-        total_return_pct=row.total_return_pct,
-        win_rate=row.win_rate,
-        expectancy=row.expectancy,
-        sharpe_ratio=row.sharpe_ratio,
-        max_drawdown_pct=row.max_drawdown_pct,
-        turnover=row.turnover,
-        avg_exposure_pct=row.avg_exposure_pct,
-        max_exposure_pct=row.max_exposure_pct,
-        error_message=row.error_message,
-    )
-
-
-def _serialize_backtest_detail(row: BacktestReport, trades: list[BacktestTrade]) -> BacktestDetailResponse:
-    summary = _serialize_backtest_summary(row)
-    return BacktestDetailResponse(
-        **summary.model_dump(),
-        metrics=row.metrics_json,
-        walk_forward=row.walk_forward_json,
-        regime_breakdown=row.regime_breakdown_json,
-        equity_curve=row.equity_curve_json,
-        symbol_breakdown=row.symbol_breakdown_json,
-        trades=[BacktestTradeResponse.model_validate(item, from_attributes=True) for item in trades],
     )
 
 
@@ -597,78 +545,6 @@ def list_risk_events(
     return [RiskEventResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
-@router.get("/alerts", response_model=list[RiskEventResponse])
-def list_alerts(
-    limit: int = Query(default=50, ge=1, le=500),
-    _: CurrentActor = Depends(get_current_operator),
-    session: Session = Depends(db_session_dependency),
-) -> list[RiskEventResponse]:
-    rows = AlertService(session).recent_alerts(limit=limit)
-    return [RiskEventResponse.model_validate(row, from_attributes=True) for row in rows]
-
-
-@router.get("/performance/summary", response_model=PerformanceSummaryResponse)
-def get_performance_summary(
-    window_minutes: int = Query(default=60, ge=5, le=24 * 60),
-    _: CurrentActor = Depends(get_current_operator),
-    session: Session = Depends(db_session_dependency),
-) -> PerformanceSummaryResponse:
-    counters, latencies = metrics_registry().summarize(window_minutes=window_minutes)
-    cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
-
-    total_candidates = session.scalar(
-        select(func.count()).select_from(TradeCandidate).where(TradeCandidate.created_at >= cutoff)
-    )
-    rejected_candidates = session.scalar(
-        select(func.count())
-        .select_from(TradeCandidate)
-        .where(TradeCandidate.created_at >= cutoff)
-        .where(TradeCandidate.status != "approved")
-    )
-    malformed_events = session.scalar(
-        select(func.count())
-        .select_from(RiskEvent)
-        .where(RiskEvent.created_at >= cutoff)
-        .where(RiskEvent.code == "agent_output_malformed")
-    )
-    scan_failures = session.scalar(
-        select(func.count())
-        .select_from(RiskEvent)
-        .where(RiskEvent.created_at >= cutoff)
-        .where(RiskEvent.code == "scan_failure")
-    )
-
-    total_count = int(total_candidates or 0)
-    rejected_count = int(rejected_candidates or 0)
-    state = settings_alert_snapshot(session)
-    return PerformanceSummaryResponse(
-        window_minutes=window_minutes,
-        total_trade_candidates=total_count,
-        rejected_trade_candidates=rejected_count,
-        rejection_rate=(rejected_count / max(total_count, 1)) if total_count else 0.0,
-        malformed_events=int(malformed_events or 0),
-        scan_failures=int(scan_failures or 0),
-        kill_switch_enabled=bool(state["kill_switch_enabled"]),
-        live_enabled=bool(state["live_enabled"]),
-        mode=TradingMode(str(state["mode"])),
-        counters=[
-            MetricCounterResponse(name=item.name, value=item.value, tags=item.tags)
-            for item in counters
-        ],
-        latencies=[
-            MetricLatencyResponse(
-                name=item.name,
-                samples=item.samples,
-                avg_ms=item.avg_ms,
-                p95_ms=item.p95_ms,
-                max_ms=item.max_ms,
-                tags=item.tags,
-            )
-            for item in latencies
-        ],
-    )
-
-
 @router.get("/execution-quality/samples", response_model=list[ExecutionQualitySampleResponse])
 def list_execution_quality_samples(
     symbol: str | None = None,
@@ -857,71 +733,3 @@ def run_reconciliation_now(
     }
 
 
-@router.get("/backtests", response_model=list[BacktestSummaryResponse])
-def list_backtests(
-    status: str | None = None,
-    limit: int = Query(default=20, ge=1, le=200),
-    _: CurrentActor = Depends(get_current_operator),
-    session: Session = Depends(db_session_dependency),
-) -> list[BacktestSummaryResponse]:
-    query = select(BacktestReport).order_by(BacktestReport.created_at.desc())
-    if status:
-        query = query.where(BacktestReport.status == status)
-    rows = session.scalars(query.limit(limit)).all()
-    return [_serialize_backtest_summary(row) for row in rows]
-
-
-@router.get("/backtests/{report_id}", response_model=BacktestDetailResponse)
-def get_backtest_report(
-    report_id: str,
-    _: CurrentActor = Depends(get_current_operator),
-    session: Session = Depends(db_session_dependency),
-) -> BacktestDetailResponse:
-    report = session.get(BacktestReport, report_id)
-    if report is None:
-        raise HTTPException(status_code=404, detail=f"Backtest report {report_id} was not found.")
-    trades = session.scalars(
-        select(BacktestTrade).where(BacktestTrade.report_id == report_id).order_by(BacktestTrade.signal_at.desc())
-    ).all()
-    return _serialize_backtest_detail(report, trades)
-
-
-@router.post("/backtests", response_model=BacktestResponse)
-def launch_backtest(
-    payload: BacktestRequest,
-    current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
-    session: Session = Depends(db_session_dependency),
-) -> BacktestResponse:
-    if not payload.symbols:
-        raise HTTPException(status_code=400, detail="At least one symbol is required.")
-
-    report = BacktestReport(
-        status="queued",
-        symbols=[item.strip().upper() for item in payload.symbols if item.strip()],
-        start_at=payload.start,
-        end_at=payload.end,
-        interval_minutes=payload.interval_minutes,
-        initial_equity=payload.initial_equity,
-        slippage_bps=payload.slippage_bps,
-        commission_per_share=payload.commission_per_share,
-        fill_delay_bars=payload.fill_delay_bars,
-        reject_probability=payload.reject_probability,
-        max_holding_bars=payload.max_holding_bars,
-        random_seed=payload.random_seed,
-    )
-    session.add(report)
-    session.flush()
-
-    task = enqueue_backtest(payload, report.id)
-    report.task_id = task.id
-    session.add(
-        AuditLog(
-            action="backtest.queued",
-            actor=current.email,
-            actor_role=current.role.value,
-            session_id=current.session_id,
-            details={"task_id": task.id, "report_id": report.id, "symbols": report.symbols},
-        )
-    )
-    session.commit()
-    return BacktestResponse(accepted=True, task_id=task.id, report_id=report.id)

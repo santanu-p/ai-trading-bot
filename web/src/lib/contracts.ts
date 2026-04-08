@@ -334,6 +334,13 @@ export interface PerformanceSummaryResponse {
   kill_switch_enabled: boolean;
   live_enabled: boolean;
   mode: TradingMode;
+  portfolio_position_count: number;
+  portfolio_gross_exposure: number;
+  portfolio_net_exposure: number;
+  portfolio_largest_position_notional: number;
+  latest_equity: number;
+  latest_buying_power: number;
+  latest_daily_pl: number;
   counters: MetricCounterResponse[];
   latencies: MetricLatencyResponse[];
 }

@@ -259,6 +259,8 @@ Response includes:
 - total and rejected trade-candidate counts with rejection rate
 - malformed-output and scan-failure counts
 - kill-switch/live state snapshot
+- portfolio health snapshot (position count, gross/net exposure, largest position notional)
+- latest equity/buying-power/daily-PnL values from the most recent portfolio snapshot
 - counter metrics with tag dimensions
 - latency metrics with average, p95, max, and sample count
 
