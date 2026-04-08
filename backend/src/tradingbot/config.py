@@ -128,6 +128,8 @@ def validate_runtime_settings(settings: Settings, *, service_name: str) -> None:
     if settings.is_production_like:
         if settings.session_secret.strip() in {"", "change-me"}:
             raise ValueError(f"{service_name} startup blocked: SESSION_SECRET must be set to a non-default value.")
+        if len(settings.session_secret.strip()) < 32:
+            raise ValueError(f"{service_name} startup blocked: SESSION_SECRET must be at least 32 characters.")
         if not settings.session_cookie_secure:
             raise ValueError(f"{service_name} startup blocked: SESSION_COOKIE_SECURE must be true outside development.")
 
@@ -139,7 +141,10 @@ def validate_runtime_settings(settings: Settings, *, service_name: str) -> None:
         )
     if settings.allow_live_trading:
         if not live_key or not live_secret:
-            raise ValueError(f"{service_name} startup blocked: live broker credentials are required when live trading is enabled.")
+            raise ValueError(
+                f"{service_name} startup blocked: "
+                "live broker credentials are required when live trading is enabled.",
+            )
         if (paper_key, paper_secret) == (live_key, live_secret):
             raise ValueError(
                 f"{service_name} startup blocked: paper and live broker credentials must be separate when live trading is enabled.",

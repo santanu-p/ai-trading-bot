@@ -256,16 +256,23 @@ class AlpacaRESTMixin:
         self.credential_mode = credential_mode
         api_key, api_secret = self._credentials()
         if not api_key or not api_secret:
-            if credential_mode == TradingMode.LIVE:
-                raise RuntimeError("ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET must be configured.")
-            raise RuntimeError(
-                "ALPACA_PAPER_API_KEY and ALPACA_PAPER_API_SECRET must be configured (or ALPACA_API_KEY/ALPACA_API_SECRET fallback).",
-            )
+            raise RuntimeError(self._missing_credentials_error())
 
     def _credentials(self) -> tuple[str | None, str | None]:
         if self.credential_mode == TradingMode.LIVE:
             return self.settings.live_broker_credentials()
         return self.settings.paper_broker_credentials()
+
+    def _missing_credentials_error(self) -> str:
+        if self.credential_mode == TradingMode.LIVE:
+            return (
+                "Live Alpaca credentials are missing. Configure "
+                "ALPACA_LIVE_API_KEY/ALPACA_LIVE_API_SECRET or ALPACA_API_KEY/ALPACA_API_SECRET fallback."
+            )
+        return (
+            "Paper Alpaca credentials are missing. Configure "
+            "ALPACA_PAPER_API_KEY/ALPACA_PAPER_API_SECRET or ALPACA_API_KEY/ALPACA_API_SECRET fallback."
+        )
 
     def _request_json(
         self,
@@ -280,11 +287,7 @@ class AlpacaRESTMixin:
         data = json.dumps(body).encode("utf-8") if body is not None else None
         api_key, api_secret = self._credentials()
         if api_key is None or api_secret is None:
-            if self.credential_mode == TradingMode.LIVE:
-                raise RuntimeError("ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET must be configured.")
-            raise RuntimeError(
-                "ALPACA_PAPER_API_KEY and ALPACA_PAPER_API_SECRET must be configured (or ALPACA_API_KEY/ALPACA_API_SECRET fallback).",
-            )
+            raise RuntimeError(self._missing_credentials_error())
         request = Request(
             f"{base_url}{path}{query}",
             data=data,
