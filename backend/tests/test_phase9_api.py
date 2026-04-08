@@ -66,6 +66,21 @@ def test_phase9_health_endpoint_propagates_request_id(api_client: TestClient) ->
     assert response.headers.get("x-request-id") == "phase9-request-id"
 
 
+def test_phase9_liveness_and_readiness_endpoints(
+    api_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("tradingbot.api.routers.health._redis_ready", lambda: True)
+
+    live = api_client.get("/health/live")
+    assert live.status_code == 200
+    assert live.json() == {"status": "ok"}
+
+    ready = api_client.get("/health/ready")
+    assert ready.status_code == 200
+    assert ready.json() == {"status": "ok", "checks": {"database": "ok", "redis": "ok"}}
+
+
 def test_phase9_auth_session_and_observability_endpoints(api_client: TestClient) -> None:
     unauthenticated = api_client.get("/performance/summary")
     assert unauthenticated.status_code == 401

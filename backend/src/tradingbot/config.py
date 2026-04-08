@@ -5,6 +5,9 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 
 
+_KNOWN_ENVIRONMENTS = {"development", "test", "staging", "production"}
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw_value = os.getenv(name)
     if raw_value is None:
@@ -60,6 +63,10 @@ class Settings:
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
     alpaca_api_key: str | None = os.getenv("ALPACA_API_KEY")
     alpaca_api_secret: str | None = os.getenv("ALPACA_API_SECRET")
+    alpaca_paper_api_key: str | None = os.getenv("ALPACA_PAPER_API_KEY")
+    alpaca_paper_api_secret: str | None = os.getenv("ALPACA_PAPER_API_SECRET")
+    alpaca_live_api_key: str | None = os.getenv("ALPACA_LIVE_API_KEY")
+    alpaca_live_api_secret: str | None = os.getenv("ALPACA_LIVE_API_SECRET")
     alpaca_paper_base_url: str = os.getenv(
         "ALPACA_PAPER_BASE_URL",
         "https://paper-api.alpaca.markets",
@@ -81,6 +88,62 @@ class Settings:
     live_trading_allowed_brokers: tuple[str, ...] = _env_csv("LIVE_TRADING_ALLOWED_BROKERS")
     live_enable_code_ttl_minutes: int = _env_int("LIVE_ENABLE_CODE_TTL_MINUTES", 10)
     intraday_flatten_buffer_minutes: int = _env_int("INTRADAY_FLATTEN_BUFFER_MINUTES", 15)
+
+    @property
+    def normalized_environment(self) -> str:
+        return self.environment.strip().lower()
+
+    @property
+    def is_production_like(self) -> bool:
+        return self.normalized_environment in {"staging", "production"}
+
+    def paper_broker_credentials(self) -> tuple[str | None, str | None]:
+        return (
+            self.alpaca_paper_api_key or self.alpaca_api_key,
+            self.alpaca_paper_api_secret or self.alpaca_api_secret,
+        )
+
+    def live_broker_credentials(self) -> tuple[str | None, str | None]:
+        return (
+            self.alpaca_live_api_key or self.alpaca_api_key,
+            self.alpaca_live_api_secret or self.alpaca_api_secret,
+        )
+
+
+def validate_runtime_settings(settings: Settings, *, service_name: str) -> None:
+    env = settings.normalized_environment
+    if env not in _KNOWN_ENVIRONMENTS:
+        known = ", ".join(sorted(_KNOWN_ENVIRONMENTS))
+        raise ValueError(f"{service_name} startup blocked: ENVIRONMENT must be one of {known}.")
+
+    if bool(settings.alpaca_paper_api_key) != bool(settings.alpaca_paper_api_secret):
+        raise ValueError(
+            f"{service_name} startup blocked: ALPACA_PAPER_API_KEY and ALPACA_PAPER_API_SECRET must be set together.",
+        )
+    if bool(settings.alpaca_live_api_key) != bool(settings.alpaca_live_api_secret):
+        raise ValueError(
+            f"{service_name} startup blocked: ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET must be set together.",
+        )
+
+    if settings.is_production_like:
+        if settings.session_secret.strip() in {"", "change-me"}:
+            raise ValueError(f"{service_name} startup blocked: SESSION_SECRET must be set to a non-default value.")
+        if not settings.session_cookie_secure:
+            raise ValueError(f"{service_name} startup blocked: SESSION_COOKIE_SECURE must be true outside development.")
+
+    paper_key, paper_secret = settings.paper_broker_credentials()
+    live_key, live_secret = settings.live_broker_credentials()
+    if settings.is_production_like and (not paper_key or not paper_secret):
+        raise ValueError(
+            f"{service_name} startup blocked: paper broker credentials are required in staging/production.",
+        )
+    if settings.allow_live_trading:
+        if not live_key or not live_secret:
+            raise ValueError(f"{service_name} startup blocked: live broker credentials are required when live trading is enabled.")
+        if (paper_key, paper_secret) == (live_key, live_secret):
+            raise ValueError(
+                f"{service_name} startup blocked: paper and live broker credentials must be separate when live trading is enabled.",
+            )
 
 
 @lru_cache(maxsize=1)

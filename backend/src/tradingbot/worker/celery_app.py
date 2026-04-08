@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from celery import Celery
 
-from tradingbot.config import get_settings
+from tradingbot.config import get_settings, validate_runtime_settings
 
 settings = get_settings()
+validate_runtime_settings(settings, service_name="worker")
 
 celery_app = Celery(
     "tradingbot",
@@ -31,4 +32,3 @@ celery_app.conf.beat_schedule = {
         "schedule": 60,
     },
 }
-

@@ -62,6 +62,19 @@ Returns the current authenticated operator identity (`email`, `role`, `expires_a
 
 Simple health probe.
 
+### `GET /health/live`
+
+Liveness probe for orchestrators.
+
+### `GET /health/ready`
+
+Readiness probe. Returns dependency status for:
+
+- database connectivity
+- redis connectivity
+
+Returns `503` with a degraded check map if a dependency is unavailable.
+
 ## Observability Headers
 
 - API responses now include `x-request-id`.

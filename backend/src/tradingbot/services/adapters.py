@@ -251,10 +251,21 @@ class NewsAdapter(Protocol):
 
 
 class AlpacaRESTMixin:
-    def __init__(self) -> None:
+    def __init__(self, *, credential_mode: TradingMode = TradingMode.PAPER) -> None:
         self.settings = get_settings()
-        if not self.settings.alpaca_api_key or not self.settings.alpaca_api_secret:
-            raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET must be configured.")
+        self.credential_mode = credential_mode
+        api_key, api_secret = self._credentials()
+        if not api_key or not api_secret:
+            if credential_mode == TradingMode.LIVE:
+                raise RuntimeError("ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET must be configured.")
+            raise RuntimeError(
+                "ALPACA_PAPER_API_KEY and ALPACA_PAPER_API_SECRET must be configured (or ALPACA_API_KEY/ALPACA_API_SECRET fallback).",
+            )
+
+    def _credentials(self) -> tuple[str | None, str | None]:
+        if self.credential_mode == TradingMode.LIVE:
+            return self.settings.live_broker_credentials()
+        return self.settings.paper_broker_credentials()
 
     def _request_json(
         self,
@@ -267,10 +278,13 @@ class AlpacaRESTMixin:
     ) -> Any:
         query = f"?{urlencode(params, doseq=True)}" if params else ""
         data = json.dumps(body).encode("utf-8") if body is not None else None
-        api_key = self.settings.alpaca_api_key
-        api_secret = self.settings.alpaca_api_secret
+        api_key, api_secret = self._credentials()
         if api_key is None or api_secret is None:
-            raise RuntimeError("ALPACA_API_KEY and ALPACA_API_SECRET must be configured.")
+            if self.credential_mode == TradingMode.LIVE:
+                raise RuntimeError("ALPACA_LIVE_API_KEY and ALPACA_LIVE_API_SECRET must be configured.")
+            raise RuntimeError(
+                "ALPACA_PAPER_API_KEY and ALPACA_PAPER_API_SECRET must be configured (or ALPACA_API_KEY/ALPACA_API_SECRET fallback).",
+            )
         request = Request(
             f"{base_url}{path}{query}",
             data=data,
@@ -320,7 +334,7 @@ class AlpacaRESTMixin:
 
 class AlpacaExecutionAdapter(AlpacaRESTMixin):
     def __init__(self, mode: TradingMode) -> None:
-        super().__init__()
+        super().__init__(credential_mode=mode)
         self.broker_slug = BrokerSlug.ALPACA
         self.mode = mode
         self.base_url = (

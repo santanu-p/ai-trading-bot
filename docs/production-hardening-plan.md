@@ -96,6 +96,13 @@ Exit gate:
 
 - a fresh environment can be deployed using versioned migrations and explicit env config only
 
+Implementation status in this repo:
+
+- startup config validation is enforced in API and worker boot paths
+- `/health`, `/health/live`, and `/health/ready` are available
+- readiness now checks database and redis dependencies
+- startup now validates paper/live broker credential pairing and requires distinct credentials when live trading is enabled
+
 ## Phase 2: Harden Broker Execution
 
 Goal:
