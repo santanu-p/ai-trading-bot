@@ -22,6 +22,7 @@ from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.contracts import ContractMasterService
 from tradingbot.services.evaluation import TradeReviewService
 from tradingbot.services.pretrade import PreTradeValidator
+from tradingbot.services.risk import PortfolioRiskService, risk_policy_from_settings
 
 TERMINAL_STATUSES = {
     OrderStatus.FILLED,
@@ -102,6 +103,7 @@ class ExecutionService:
         settings_row: BotSettings,
         run_id: str,
         decision: CommitteeDecision,
+        decision_context: dict[str, object] | None = None,
         risk_result: RiskCheckResult,
         execution_allowed: bool,
         block_reason: str | None,
@@ -127,7 +129,7 @@ class ExecutionService:
             take_profit=decision.take_profit,
             requires_human_approval=requires_human_approval,
             idempotency_key=f"run:{run_id}",
-            decision_payload=decision.model_dump(mode="json"),
+            decision_payload=decision_context or decision.model_dump(mode="json"),
             risk_payload=risk_result.model_dump(mode="json"),
             block_reason=block_reason
             if execution_allowed
@@ -245,6 +247,7 @@ class ExecutionService:
             mode=intent.mode,
             decision=decision,
             risk_result=risk_result,
+            decision_context=intent.decision_payload,
             execution_allowed=True,
             block_reason=intent.block_reason,
             instrument_class=settings_row.instrument_class or InstrumentClass.CASH_EQUITY,
@@ -274,6 +277,7 @@ class ExecutionService:
         mode: TradingMode,
         decision: CommitteeDecision,
         risk_result: RiskCheckResult,
+        decision_context: dict[str, object] | None = None,
         execution_allowed: bool = True,
         block_reason: str | None = None,
         instrument_class: InstrumentClass = InstrumentClass.CASH_EQUITY,
@@ -350,7 +354,7 @@ class ExecutionService:
             status=OrderStatus.NEW,
             client_order_id=client_order_id,
             submitted_at=datetime.now(UTC),
-            metadata_json={"decision": decision.model_dump(mode="json")},
+            metadata_json={"decision": decision_context or decision.model_dump(mode="json")},
         )
         self.session.add(order)
         self.session.flush()
@@ -532,7 +536,15 @@ class ExecutionService:
         )
         self._apply_fill_to_position(order.symbol, fill.quantity, fill.price, fill.side)
         if target_status == OrderStatus.FILLED and order.direction == OrderIntent.SELL:
-            self.trade_reviews.queue_review_for_exit_order(order)
+            review = self.trade_reviews.queue_review_for_exit_order(order)
+            if review is not None:
+                self._portfolio_risk_service().upsert_cooldown_from_exit(
+                    symbol=order.symbol,
+                    pnl=review.pnl,
+                    return_pct=review.return_pct,
+                    review_payload=review.review_payload,
+                    as_of=fill.filled_at,
+                )
         return True
 
     def sync_positions_snapshot(self, broker_positions: list[BrokerPosition], *, source: str) -> None:
@@ -839,6 +851,10 @@ class ExecutionService:
                 self.session.delete(position)
             else:
                 position.market_value = position.quantity * position.average_entry_price
+
+    def _portfolio_risk_service(self) -> PortfolioRiskService:
+        settings_row = self.session.get(BotSettings, 1)
+        return PortfolioRiskService(self.session, risk_policy_from_settings(settings_row))
 
 
 

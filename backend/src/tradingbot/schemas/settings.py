@@ -67,7 +67,24 @@ class BotSettingsResponse(BaseModel):
     max_daily_loss_pct: float
     max_position_risk_pct: float
     max_symbol_notional_pct: float
+    max_gross_exposure_pct: float
+    max_sector_exposure_pct: float
+    max_correlation_exposure_pct: float
+    max_event_cluster_positions: int
+    volatility_target_pct: float
+    atr_sizing_multiplier: float
+    equity_curve_throttle_start_pct: float
+    equity_curve_throttle_min_scale: float
+    intraday_drawdown_pause_pct: float
+    loss_streak_reduction_threshold: int
+    loss_streak_size_scale: float
+    execution_failure_review_threshold: int
+    severe_anomaly_kill_switch_threshold: int
     symbol_cooldown_minutes: int
+    symbol_cooldown_profit_minutes: int
+    symbol_cooldown_stopout_minutes: int
+    symbol_cooldown_event_minutes: int
+    symbol_cooldown_whipsaw_minutes: int
     openai_model: str
     watchlist: list[str]
     broker_settings: BrokerSettings
@@ -88,7 +105,24 @@ class BotSettingsUpdate(BaseModel):
     max_daily_loss_pct: float = Field(default=0.025, gt=0, le=0.25)
     max_position_risk_pct: float = Field(default=0.005, gt=0, le=0.05)
     max_symbol_notional_pct: float = Field(default=0.16, gt=0, le=0.5)
+    max_gross_exposure_pct: float = Field(default=0.9, gt=0, le=1.5)
+    max_sector_exposure_pct: float = Field(default=0.35, gt=0, le=1)
+    max_correlation_exposure_pct: float = Field(default=0.45, gt=0, le=1)
+    max_event_cluster_positions: int = Field(default=3, ge=1, le=30)
+    volatility_target_pct: float = Field(default=1.2, gt=0, le=10)
+    atr_sizing_multiplier: float = Field(default=1.0, gt=0, le=5)
+    equity_curve_throttle_start_pct: float = Field(default=0.015, ge=0, le=0.5)
+    equity_curve_throttle_min_scale: float = Field(default=0.4, gt=0, le=1)
+    intraday_drawdown_pause_pct: float = Field(default=0.03, gt=0, le=0.5)
+    loss_streak_reduction_threshold: int = Field(default=3, ge=1, le=20)
+    loss_streak_size_scale: float = Field(default=0.6, gt=0, le=1)
+    execution_failure_review_threshold: int = Field(default=3, ge=1, le=20)
+    severe_anomaly_kill_switch_threshold: int = Field(default=4, ge=1, le=100)
     symbol_cooldown_minutes: int = Field(default=45, ge=0, le=480)
+    symbol_cooldown_profit_minutes: int = Field(default=20, ge=0, le=720)
+    symbol_cooldown_stopout_minutes: int = Field(default=90, ge=0, le=720)
+    symbol_cooldown_event_minutes: int = Field(default=180, ge=0, le=1440)
+    symbol_cooldown_whipsaw_minutes: int = Field(default=120, ge=0, le=1440)
     openai_model: str = Field(default="gpt-5-mini", min_length=1)
     watchlist: list[str] = Field(default_factory=list)
     broker_settings: BrokerSettings = Field(default_factory=BrokerSettings)

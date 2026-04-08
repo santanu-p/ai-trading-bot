@@ -35,6 +35,11 @@ No dependencies were installed and no services were started while creating this 
   - prompt registry with persisted per-run model and prompt-version lineage
   - schema-repair retries for malformed agent outputs
   - post-trade review queue and grouped review summaries by model/prompt signature
+- Phase 6 portfolio-risk upgrades with:
+  - portfolio-aware exposure controls (gross/sector/correlation/event clustering)
+  - dynamic sizing (ATR/volatility/confidence/equity-curve/loss-streak scaling)
+  - drawdown and anomaly circuit breakers with automatic kill-switch activation
+  - persisted contextual symbol cooldowns (`profit_exit`, `stop_out`, `news_whipsaw`, `event_failure`)
 - Multi-agent committee shape:
   - structured specialist committee
   - deterministic risk engine
@@ -93,10 +98,10 @@ No dependencies were installed and no services were started while creating this 
 5. For each enabled watchlist symbol, the worker fetches Alpaca bars and Alpaca news.
 6. The worker computes engineered features, merges index context, extracts structured events, and validates data freshness/feed integrity.
 7. A specialist committee produces structured decisions, the chair summarizes them, and malformed outputs get one repair pass before rejection.
-8. The risk engine deterministically approves or rejects the committee proposal.
+8. The risk engine deterministically approves or rejects the committee proposal with portfolio-aware limits and dynamic sizing.
 9. Approved decisions are persisted as execution intents instead of being submitted inline.
 10. Operators review live intents when required, and the execution worker re-checks market hours, kill switch, broker connectivity, and live gates before broker submission.
-11. Filled exits generate post-trade reviews tied back to model/prompt lineage when that data is available.
+11. Filled exits generate post-trade reviews tied back to model/prompt lineage and update outcome-aware symbol cooldown state.
 12. The dashboard and API poll/read settings, intents, runs, orders, sessions, audit logs, risk state, and review queues.
 
 ## Documentation
@@ -122,4 +127,4 @@ No dependencies were installed and no services were started while creating this 
 ## Notes
 
 - Some transient Python cache artifacts may exist from parse attempts that were blocked by the Windows sandbox; they are ignored by `.gitignore`.
-- The current repository now includes Phase 0-5 roadmap work, but it is still not a production-hardened trading system.
+- The current repository now includes Phase 0-6 roadmap work, but it is still not a production-hardened trading system.

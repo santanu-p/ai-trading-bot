@@ -82,6 +82,10 @@ Admin-only update for:
 - scan interval
 - consensus threshold
 - open-position and loss caps
+- portfolio exposure caps (gross, sector, correlation, event-cluster)
+- sizing controls (ATR multiplier, volatility target, equity-curve throttle, loss-streak throttle)
+- circuit-breaker controls (drawdown pause, execution-failure review threshold, severe-anomaly kill-switch threshold)
+- outcome-aware cooldown windows (base/profit/stopout/event/whipsaw)
 - model selection
 - watchlist
 - broker metadata
@@ -216,6 +220,7 @@ Returns persisted positions.
 Returns risk and failure events.
 
 Phase 5 adds `agent_output_malformed` and recurring `trade_review_pattern` events.
+Phase 6 adds `auto_kill_switch` when severe anomaly clustering triggers an automatic safety halt.
 
 ## Trade Reviews
 
@@ -242,6 +247,10 @@ Each row includes:
 ### `GET /trade-reviews/summary`
 
 Returns grouped review summaries by model and prompt signature so performance can be compared across committee versions.
+
+### Symbol cooldown behavior
+
+Filled exit orders now update persisted cooldown state, and subsequent scans enforce cooldown expiry before allowing new entries on the same symbol.
 
 ### `GET /audit-logs`
 

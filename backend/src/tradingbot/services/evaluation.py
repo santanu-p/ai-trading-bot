@@ -73,6 +73,7 @@ class TradeReviewService:
                 "quantity": quantity,
                 "thesis": decision_payload.get("thesis"),
                 "risk_notes": decision_payload.get("risk_notes", []),
+                "feature_snapshot": decision_payload.get("feature_snapshot", {}),
                 "structured_events": decision_payload.get("structured_events", []),
                 "committee_notes": decision_payload.get("committee_notes", []),
             },

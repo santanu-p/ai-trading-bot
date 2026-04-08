@@ -14,7 +14,8 @@ Status note as of 2026-04-08:
 - Phase 3 research-quality items are now implemented in the current repo.
 - Phase 4 data-depth items are now implemented in the current repo.
 - Phase 5 agent-intelligence items are now implemented in the current repo.
-- The remaining sections below describe the next upgrade path starting from Phase 6.
+- Phase 6 portfolio-risk engine items are now implemented in the current repo.
+- The remaining sections below describe the next upgrade path starting from Phase 7.
 
 ## Critical Scope Decision
 
@@ -611,6 +612,8 @@ Implemented:
 
 ## Phase 6: Upgrade Risk Into A Real Portfolio Engine
 
+Current repo status: completed.
+
 ### Replace symbol-level checks with portfolio-aware risk
 
 Current issue:
@@ -630,6 +633,11 @@ Suggested files:
 - [risk.py](../backend/src/tradingbot/services/risk.py)
 - [execution.py](../backend/src/tradingbot/services/execution.py)
 
+Implemented:
+
+- deterministic risk now enforces gross exposure caps, sector concentration caps, correlation concentration caps, and event-cluster gating
+- risk validation now uses runtime portfolio metrics and active cooldown state, not only single-symbol checks
+
 ### Add dynamic position sizing
 
 What to add or modify:
@@ -638,6 +646,11 @@ What to add or modify:
 - volatility-targeted sizing
 - equity-curve based throttling
 - strategy confidence scaling
+
+Implemented:
+
+- position size now combines stop-distance risk budget with ATR-aware stop normalization
+- volatility target scaling, confidence scaling, equity-curve throttling, and loss-streak throttling are applied before final approved quantity is persisted
 
 ### Add drawdown and circuit-breaker logic
 
@@ -648,6 +661,12 @@ What to add or modify:
 - require manual review after repeated execution failures
 - auto-enable kill switch after severe anomalies
 
+Implemented:
+
+- new entry approvals are blocked when drawdown circuit thresholds are breached
+- repeated execution-failure clusters now force manual-review style rejection notes at the risk boundary
+- severe anomaly clusters now auto-enable the kill switch and emit explicit `auto_kill_switch` risk events
+
 ### Add symbol cooldowns that reflect outcome and context
 
 What to add or modify:
@@ -655,6 +674,12 @@ What to add or modify:
 - separate cooldowns for stop-outs vs profit exits
 - longer cooldown after high-volatility event failures
 - avoid immediate re-entry after news whipsaws
+
+Implemented:
+
+- symbol cooldowns are now persisted in `symbol_cooldowns` and checked before new entries
+- exit-driven cooldown typing now differentiates `profit_exit`, `stop_out`, `news_whipsaw`, and `event_failure`
+- high-volatility event losses now apply extended cooldown windows before re-entry
 
 ## Phase 7: Optimize Execution Quality
 
@@ -798,11 +823,11 @@ Minimum bar:
 
 If the goal is maximum improvement for the next development cycle, do these first:
 
-1. Upgrade risk from single-trade checks to portfolio-aware controls (gross/correlation/sector/event concentration limits).
-2. Add execution-quality analytics and TCA feedback loops so symbol selection and sizing react to observed fill quality.
-3. Expand observability with structured logs, alerting, and operator-facing performance/risk analytics.
-4. Harden CI/release discipline with replay regression gates and strategy-change release notes.
-5. Deepen the operator surface so review queues, committee disagreement, and prompt-version performance are visible in the dashboard.
+1. Add execution-quality analytics and TCA feedback loops so symbol selection and sizing react to observed fill quality.
+2. Expand observability with structured logs, alerting, and operator-facing performance/risk analytics.
+3. Harden CI/release discipline with replay regression gates and strategy-change release notes.
+4. Deepen the operator surface so review queues, committee disagreement, and prompt-version performance are visible in the dashboard.
+5. Add release-level controls for strategy/risk threshold rollout and rollback auditability.
 
 ## Definition Of "Expert" For This Repo
 

@@ -31,7 +31,7 @@ from tradingbot.services.events import extract_structured_events, serialize_stru
 from tradingbot.services.execution import ExecutionService
 from tradingbot.services.features import IndexContext, build_feature_snapshot, infer_market_index_context
 from tradingbot.services.reconciliation import ReconciliationService
-from tradingbot.services.risk import RiskEngine, RiskPolicy
+from tradingbot.services.risk import PortfolioRiskService, PositionExposure, RiskEngine, RiskPolicy
 from tradingbot.services.store import (
     ensure_bot_settings,
     live_trading_env_allowed,
@@ -51,6 +51,23 @@ def _build_risk_engine(settings_row: BotSettings) -> RiskEngine:
             max_position_risk_pct=settings_row.max_position_risk_pct,
             max_symbol_notional_pct=settings_row.max_symbol_notional_pct,
             symbol_cooldown_minutes=settings_row.symbol_cooldown_minutes,
+            max_gross_exposure_pct=settings_row.max_gross_exposure_pct,
+            max_sector_exposure_pct=settings_row.max_sector_exposure_pct,
+            max_correlation_exposure_pct=settings_row.max_correlation_exposure_pct,
+            max_event_cluster_positions=settings_row.max_event_cluster_positions,
+            volatility_target_pct=settings_row.volatility_target_pct,
+            atr_sizing_multiplier=settings_row.atr_sizing_multiplier,
+            equity_curve_throttle_start_pct=settings_row.equity_curve_throttle_start_pct,
+            equity_curve_throttle_min_scale=settings_row.equity_curve_throttle_min_scale,
+            intraday_drawdown_pause_pct=settings_row.intraday_drawdown_pause_pct,
+            loss_streak_reduction_threshold=settings_row.loss_streak_reduction_threshold,
+            loss_streak_size_scale=settings_row.loss_streak_size_scale,
+            execution_failure_review_threshold=settings_row.execution_failure_review_threshold,
+            severe_anomaly_kill_switch_threshold=settings_row.severe_anomaly_kill_switch_threshold,
+            symbol_cooldown_profit_minutes=settings_row.symbol_cooldown_profit_minutes,
+            symbol_cooldown_stopout_minutes=settings_row.symbol_cooldown_stopout_minutes,
+            symbol_cooldown_event_minutes=settings_row.symbol_cooldown_event_minutes,
+            symbol_cooldown_whipsaw_minutes=settings_row.symbol_cooldown_whipsaw_minutes,
         )
     )
 
@@ -246,6 +263,19 @@ def run_market_scan() -> dict[str, int]:
         end = datetime.now(UTC)
         start = end - timedelta(minutes=settings_row.scan_interval_minutes * 40)
         queued = 0
+        portfolio_risk = PortfolioRiskService(session, risk_engine.policy)
+        runtime_metrics = portfolio_risk.compute_runtime_metrics(
+            equity=account.equity,
+            positions=broker_positions,
+            now=end,
+        )
+        if portfolio_risk.trigger_kill_switch_if_needed(settings_row, runtime=runtime_metrics):
+            session.commit()
+            return {
+                "queued": 0,
+                "repaired_children": 0,
+                "unresolved_mismatches": reconciliation_report.unresolved_mismatches,
+            }
         trading_profile = serialize_trading_profile(settings_row)
         executor_block_reason = execution_support.analysis_only_downgrade_reason
         data_quality = DataQualityValidator(
@@ -369,7 +399,7 @@ def run_market_scan() -> dict[str, int]:
                     "daily_pl": round(account.daily_pl, 4),
                     "open_positions": open_positions,
                     "current_symbol_exposure": round(execution.current_symbol_exposure(item.symbol), 4),
-                    "portfolio_exposure": round(sum(position.market_value for position in broker_positions), 4),
+                    "portfolio_exposure": round(runtime_metrics.portfolio_exposure, 4),
                     "positions": [
                         {
                             "symbol": position.symbol,
@@ -408,6 +438,7 @@ def run_market_scan() -> dict[str, int]:
                         notes=[executor_block_reason] if executor_block_reason else [],
                     )
                 else:
+                    cooldown_active, cooldown_notes = portfolio_risk.active_cooldown(item.symbol, as_of=end)
                     risk_result = risk_engine.validate(
                         proposal,
                         equity=account.equity,
@@ -415,7 +446,15 @@ def run_market_scan() -> dict[str, int]:
                         open_positions=open_positions,
                         daily_loss_pct=max((-account.daily_pl / max(account.equity, 1)), 0),
                         active_symbol_exposure=execution.current_symbol_exposure(item.symbol),
-                        is_symbol_in_cooldown=False,
+                        is_symbol_in_cooldown=cooldown_active,
+                        portfolio_exposure=runtime_metrics.portfolio_exposure,
+                        positions=runtime_metrics.positions,
+                        feature_snapshot=feature_snapshot,
+                        structured_events=structured_event_payload,
+                        equity_drawdown_pct=runtime_metrics.equity_drawdown_pct,
+                        loss_streak=runtime_metrics.loss_streak,
+                        recent_execution_failures=runtime_metrics.recent_execution_failures,
+                        pretrade_notes=cooldown_notes,
                     )
                 decision = committee.finalize(proposal, risk_result=risk_result)
                 decision_payload = _decision_payload(
@@ -453,6 +492,7 @@ def run_market_scan() -> dict[str, int]:
                         settings_row=settings_row,
                         run_id=run.id,
                         decision=decision,
+                        decision_context=decision_payload,
                         risk_result=risk_result,
                         execution_allowed=execution_support.supported_for_execution is not None,
                         block_reason=executor_block_reason,
@@ -460,6 +500,14 @@ def run_market_scan() -> dict[str, int]:
                     if intent.status.value == "approved":
                         enqueue_execution_intent(intent.id)
                     open_positions += 1
+                    runtime_metrics.portfolio_exposure += risk_result.approved_quantity * decision.entry
+                    runtime_metrics.positions.append(
+                        PositionExposure(
+                            symbol=decision.symbol,
+                            market_value=risk_result.approved_quantity * decision.entry,
+                            side="long",
+                        )
+                    )
                     queued += 1
                 else:
                     session.add(

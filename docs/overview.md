@@ -52,7 +52,10 @@ The worker owns:
 - data freshness and feed-quality gating before agent inference
 - structured specialist committee formation with prompt-version lineage
 - malformed-output repair flow for agent payloads
-- deterministic risk checks
+- deterministic portfolio-aware risk checks (gross/sector/correlation/event concentration)
+- dynamic position sizing (ATR/volatility/confidence/equity-curve/loss-streak scaling)
+- runtime risk guardrails (drawdown circuit checks, execution-failure review gating, severe-anomaly kill-switch automation)
+- outcome-aware symbol cooldown enforcement
 - execution-intent queueing and dispatch
 - broker reconciliation, fill ingestion, and local position sync
 - child-order repair and session-close flatten handoff
@@ -80,3 +83,4 @@ The dashboard owns:
 - Broker responses, order transitions, and fills are persisted so the UI can reflect lifecycle state without re-deriving it.
 - Decision payloads now persist feature snapshots, structured event context, and decision-time data timestamps for auditability.
 - Agent runs now also persist model/prompt lineage and committee input snapshots for later trade-review comparisons.
+- Symbol-level cooldown state is now persisted and refreshed from filled-exit outcomes so re-entry throttles survive worker restarts.

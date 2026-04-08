@@ -137,11 +137,22 @@ The risk engine checks:
 - direction support
 - max open positions
 - daily loss budget
-- stop distance sanity
+- intraday drawdown circuit thresholds
+- stop distance sanity with ATR-aware normalization
 - buying power
 - single-symbol notional cap
-- current symbol exposure
+- gross exposure cap
+- sector and correlation concentration caps
+- event-cluster concentration caps
 - cooldown state
+- runtime execution-failure guardrails
+
+Sizing is then scaled by:
+
+- volatility target
+- strategy confidence
+- equity-curve drawdown throttle
+- loss-streak throttle
 
 ### 7. Intent handoff
 
@@ -186,6 +197,7 @@ Current ORM models cover:
 - `reconciliation_mismatches`
 - `risk_events`
 - `portfolio_snapshots`
+- `symbol_cooldowns`
 - `audit_logs`
 - `backtest_reports`
 - `backtest_trades`
@@ -195,6 +207,6 @@ Schema evolution is versioned with Alembic under `backend/alembic/`.
 ## Current Limitations
 
 - No websocket/event streaming
-- No sector exposure model
+- Sector/correlation concentration currently uses heuristic buckets rather than a full factor model
 - Frontend build/type validation was not run in this task because local Node dependencies were intentionally not installed
 - The current auth/session layer is stronger than the original scaffold, but still needs production extras such as CSRF hardening, rate limiting, and managed secret rotation

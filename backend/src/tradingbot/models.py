@@ -57,7 +57,24 @@ class BotSettings(Base, TimestampMixin):
     max_daily_loss_pct: Mapped[float] = mapped_column(Float, default=0.025)
     max_position_risk_pct: Mapped[float] = mapped_column(Float, default=0.005)
     max_symbol_notional_pct: Mapped[float] = mapped_column(Float, default=0.16)
+    max_gross_exposure_pct: Mapped[float] = mapped_column(Float, default=0.9)
+    max_sector_exposure_pct: Mapped[float] = mapped_column(Float, default=0.35)
+    max_correlation_exposure_pct: Mapped[float] = mapped_column(Float, default=0.45)
+    max_event_cluster_positions: Mapped[int] = mapped_column(Integer, default=3)
+    volatility_target_pct: Mapped[float] = mapped_column(Float, default=1.2)
+    atr_sizing_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
+    equity_curve_throttle_start_pct: Mapped[float] = mapped_column(Float, default=0.015)
+    equity_curve_throttle_min_scale: Mapped[float] = mapped_column(Float, default=0.4)
+    intraday_drawdown_pause_pct: Mapped[float] = mapped_column(Float, default=0.03)
+    loss_streak_reduction_threshold: Mapped[int] = mapped_column(Integer, default=3)
+    loss_streak_size_scale: Mapped[float] = mapped_column(Float, default=0.6)
+    execution_failure_review_threshold: Mapped[int] = mapped_column(Integer, default=3)
+    severe_anomaly_kill_switch_threshold: Mapped[int] = mapped_column(Integer, default=4)
     symbol_cooldown_minutes: Mapped[int] = mapped_column(Integer, default=45)
+    symbol_cooldown_profit_minutes: Mapped[int] = mapped_column(Integer, default=20)
+    symbol_cooldown_stopout_minutes: Mapped[int] = mapped_column(Integer, default=90)
+    symbol_cooldown_event_minutes: Mapped[int] = mapped_column(Integer, default=180)
+    symbol_cooldown_whipsaw_minutes: Mapped[int] = mapped_column(Integer, default=120)
     openai_model: Mapped[str] = mapped_column(String(100), default="gpt-5-mini")
     broker_slug: Mapped[BrokerSlug] = mapped_column(Enum(BrokerSlug), default=BrokerSlug.ALPACA)
     broker_account_type: Mapped[str] = mapped_column(String(40), default="cash")
@@ -377,6 +394,18 @@ class PortfolioSnapshot(Base, TimestampMixin):
     daily_pl: Mapped[float] = mapped_column(Float)
     exposure: Mapped[float] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(20), default="alpaca")
+
+
+class SymbolCooldown(Base, TimestampMixin):
+    __tablename__ = "symbol_cooldowns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+    cooldown_type: Mapped[str] = mapped_column(String(40), index=True)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    context_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
 class TradeReview(Base, TimestampMixin):

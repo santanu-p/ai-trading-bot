@@ -24,7 +24,7 @@ def test_risk_engine_rejects_when_daily_loss_breached() -> None:
             max_open_positions=5,
             max_daily_loss_pct=0.02,
             max_position_risk_pct=0.005,
-            max_symbol_notional_pct=0.15,
+            max_symbol_notional_pct=0.5,
             symbol_cooldown_minutes=45,
         )
     )
@@ -47,7 +47,7 @@ def test_risk_engine_sizes_position_from_stop_distance() -> None:
             max_open_positions=5,
             max_daily_loss_pct=0.02,
             max_position_risk_pct=0.005,
-            max_symbol_notional_pct=0.15,
+            max_symbol_notional_pct=0.5,
             symbol_cooldown_minutes=45,
         )
     )
@@ -61,5 +61,4 @@ def test_risk_engine_sizes_position_from_stop_distance() -> None:
         is_symbol_in_cooldown=False,
     )
     assert result.decision == RiskDecision.APPROVED
-    assert result.approved_quantity == 100
-
+    assert result.approved_quantity == 88
