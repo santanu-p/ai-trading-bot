@@ -4,9 +4,12 @@ import json
 from abc import ABC, abstractmethod
 from typing import Any
 
-from openai import OpenAI
-
 from tradingbot.config import get_settings
+
+try:
+    from openai import OpenAI
+except Exception:  # pragma: no cover - optional dependency
+    OpenAI = None
 
 try:
     from google import genai
@@ -22,6 +25,8 @@ class LLMClient(ABC):
 
 class OpenAIClient(LLMClient):
     def __init__(self, api_key: str, model: str) -> None:
+        if OpenAI is None:
+            raise RuntimeError("openai is not installed. Install it to use OPENAI_API_KEY.")
         self.client = OpenAI(api_key=api_key)
         self.model = model
 

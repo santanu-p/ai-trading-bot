@@ -103,6 +103,9 @@ class AgentRun(Base, TimestampMixin):
     status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.QUEUED)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    prompt_versions_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    input_snapshot_json: Mapped[dict] = mapped_column(JSON, default=dict)
     decision_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
@@ -126,6 +129,74 @@ class TradeCandidate(Base, TimestampMixin):
     raw_payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
     run: Mapped[AgentRun] = relationship(back_populates="trade_candidates")
+
+
+class BacktestReport(Base, TimestampMixin):
+    __tablename__ = "backtest_reports"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
+    start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    interval_minutes: Mapped[int] = mapped_column(Integer, default=5)
+    initial_equity: Mapped[float] = mapped_column(Float, default=100_000)
+    slippage_bps: Mapped[float] = mapped_column(Float, default=5.0)
+    commission_per_share: Mapped[float] = mapped_column(Float, default=0.005)
+    fill_delay_bars: Mapped[int] = mapped_column(Integer, default=1)
+    reject_probability: Mapped[float] = mapped_column(Float, default=0.03)
+    max_holding_bars: Mapped[int] = mapped_column(Integer, default=24)
+    random_seed: Mapped[int] = mapped_column(Integer, default=42)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    total_trades: Mapped[int] = mapped_column(Integer, default=0)
+    rejected_orders: Mapped[int] = mapped_column(Integer, default=0)
+    final_equity: Mapped[float] = mapped_column(Float, default=0.0)
+    total_return_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    win_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    expectancy: Mapped[float] = mapped_column(Float, default=0.0)
+    sharpe_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    max_drawdown_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    turnover: Mapped[float] = mapped_column(Float, default=0.0)
+    avg_exposure_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    max_exposure_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    metrics_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    walk_forward_json: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    regime_breakdown_json: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    equity_curve_json: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    symbol_breakdown_json: Mapped[list[dict]] = mapped_column(JSON, default=list)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    trades: Mapped[list["BacktestTrade"]] = relationship(
+        back_populates="report",
+        cascade="all, delete-orphan",
+    )
+
+
+class BacktestTrade(Base):
+    __tablename__ = "backtest_trades"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    report_id: Mapped[str] = mapped_column(ForeignKey("backtest_reports.id"), index=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    status: Mapped[str] = mapped_column(String(20), index=True)
+    regime: Mapped[str] = mapped_column(String(24), index=True)
+    signal_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    entry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    exit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    quantity: Mapped[int] = mapped_column(Integer, default=0)
+    holding_bars: Mapped[int] = mapped_column(Integer, default=0)
+    entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    gross_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    net_pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    return_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    commission_paid: Mapped[float] = mapped_column(Float, default=0.0)
+    slippage_paid: Mapped[float] = mapped_column(Float, default=0.0)
+    notes: Mapped[list[str]] = mapped_column(JSON, default=list)
+
+    report: Mapped[BacktestReport] = relationship(back_populates="trades")
 
 
 class ExecutionIntent(Base, TimestampMixin):
@@ -306,6 +377,26 @@ class PortfolioSnapshot(Base, TimestampMixin):
     daily_pl: Mapped[float] = mapped_column(Float)
     exposure: Mapped[float] = mapped_column(Float)
     source: Mapped[str] = mapped_column(String(20), default="alpaca")
+
+
+class TradeReview(Base, TimestampMixin):
+    __tablename__ = "trade_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"), nullable=True, index=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True, unique=True)
+    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
+    model_name: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    prompt_versions_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    review_score: Mapped[float] = mapped_column(Float, default=0.0)
+    pnl: Mapped[float] = mapped_column(Float, default=0.0)
+    return_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    loss_cause: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    recurring_pattern_key: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    review_payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AuditLog(Base, TimestampMixin):

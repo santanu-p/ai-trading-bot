@@ -52,6 +52,10 @@ Returns session history.
 
 Admin-only forced logout for a specific session.
 
+### `GET /authz/current`
+
+Returns the current authenticated operator identity (`email`, `role`, `expires_at`, `session_id`).
+
 ## Health
 
 ### `GET /health`
@@ -146,9 +150,25 @@ Operator/admin endpoint. Rejects an execution intent with a `detail` query strin
 
 Returns recent worker scan runs.
 
+Each `decision_payload` now includes:
+
+- engineered feature snapshot
+- structured event context
+- data-quality diagnostics
+- decision-time data timestamps
+- committee metadata including specialist outputs, chair summary, model name, and prompt versions
+
 ### `GET /decisions`
 
 Returns committee decisions persisted as trade candidates.
+
+Phase 5 committee responses may also include:
+
+- `chair_vote`
+- `committee_notes`
+- `agent_signals`
+- `model_name`
+- `prompt_versions`
 
 ### `GET /orders`
 
@@ -162,6 +182,18 @@ Returns local order lifecycle transitions.
 
 Returns recorded fills for an order.
 
+### `POST /orders/{order_id}/replace`
+
+Operator/admin endpoint. Replaces an existing order at the broker.
+
+Request body fields are optional:
+
+- `quantity`
+- `limit_price`
+- `stop_price`
+- `take_profit`
+- `time_in_force` (`day`, `gtc`, `ioc`, `fok`)
+
 ### `POST /orders/{order_id}/cancel`
 
 Operator/admin endpoint. Cancels a single order.
@@ -170,6 +202,11 @@ Operator/admin endpoint. Cancels a single order.
 
 Operator/admin endpoint. Cancels all open orders.
 
+Response includes:
+
+- `canceled_orders`
+- `flatten_submitted` (always `0` for this endpoint)
+
 ### `GET /positions`
 
 Returns persisted positions.
@@ -177,6 +214,34 @@ Returns persisted positions.
 ### `GET /risk-events`
 
 Returns risk and failure events.
+
+Phase 5 adds `agent_output_malformed` and recurring `trade_review_pattern` events.
+
+## Trade Reviews
+
+### `GET /trade-reviews`
+
+Returns persisted post-trade reviews.
+
+Query params:
+
+- `status` (`queued` or `completed`)
+- `loss_cause`
+- `limit`
+
+Each row includes:
+
+- originating `source_run_id` when available
+- `model_name`
+- `prompt_versions`
+- `review_score`
+- realized `pnl` and `return_pct`
+- classified `loss_cause`
+- summary and structured review payload
+
+### `GET /trade-reviews/summary`
+
+Returns grouped review summaries by model and prompt signature so performance can be compared across committee versions.
 
 ### `GET /audit-logs`
 
@@ -201,11 +266,39 @@ Query params:
 
 Operator/admin endpoint. Runs an immediate reconciliation pass.
 
+Response includes:
+
+- `transitions_applied`
+- `fills_ingested`
+- `mismatches_created`
+- `unresolved_mismatches`
+- `live_paused` (`0` or `1`)
+
 ## Backtests
+
+### `GET /backtests`
+
+Returns persisted backtest report summaries (newest first).
+
+Query params:
+
+- `status` (optional: `queued`, `running`, `succeeded`, `failed`)
+- `limit`
+
+### `GET /backtests/{report_id}`
+
+Returns a full backtest report:
+
+- summary metrics
+- walk-forward window metrics
+- regime breakdown
+- equity-curve payload
+- symbol breakdown
+- simulated trades
 
 ### `POST /backtests`
 
-Operator/admin endpoint. Queues a replay/backtest request.
+Operator/admin endpoint. Queues a research backtest request and persists a report row immediately with `queued` status.
 
 Request:
 
@@ -214,7 +307,14 @@ Request:
   "symbols": ["AAPL", "MSFT"],
   "start": "2026-04-01T13:30:00Z",
   "end": "2026-04-03T20:00:00Z",
-  "interval_minutes": 5
+  "interval_minutes": 5,
+  "initial_equity": 100000,
+  "slippage_bps": 5.0,
+  "commission_per_share": 0.005,
+  "fill_delay_bars": 1,
+  "reject_probability": 0.03,
+  "max_holding_bars": 24,
+  "random_seed": 42
 }
 ```
 
@@ -223,6 +323,7 @@ Response:
 ```json
 {
   "accepted": true,
-  "task_id": "celery-task-id"
+  "task_id": "celery-task-id",
+  "report_id": "backtest-report-uuid"
 }
 ```

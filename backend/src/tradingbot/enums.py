@@ -68,6 +68,12 @@ class RiskDecision(str, Enum):
 class AgentRole(str, Enum):
     MARKET = "market"
     NEWS = "news"
+    TECHNICAL_STRUCTURE = "technical_structure"
+    CATALYST = "catalyst"
+    MARKET_REGIME = "market_regime"
+    PORTFOLIO_EXPOSURE = "portfolio_exposure"
+    EXECUTION_QUALITY = "execution_quality"
+    CHAIR = "chair"
     RISK = "risk"
     COMMITTEE = "committee"
 

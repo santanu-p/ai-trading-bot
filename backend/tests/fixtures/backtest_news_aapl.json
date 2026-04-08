@@ -1,0 +1,37 @@
+[
+  {
+    "headline": "AAPL receives analyst upgrade after strong device demand",
+    "summary": "Multiple firms raised targets after holiday activation beats expectations.",
+    "source": "fixture",
+    "created_at": "2026-01-05T15:31:00Z",
+    "sentiment_hint": "upgrade"
+  },
+  {
+    "headline": "AAPL faces renewed antitrust probe in Europe",
+    "summary": "Regulators expanded an existing review and requested additional data.",
+    "source": "fixture",
+    "created_at": "2026-01-05T15:59:00Z",
+    "sentiment_hint": "probe"
+  },
+  {
+    "headline": "AAPL announces enterprise partnership with logistics leader",
+    "summary": "The partnership expands installed base and expected recurring revenue.",
+    "source": "fixture",
+    "created_at": "2026-01-05T16:18:00Z",
+    "sentiment_hint": "partnership"
+  },
+  {
+    "headline": "AAPL shares drop briefly after broker downgrade",
+    "summary": "One desk downgraded valuation despite no change to shipment estimates.",
+    "source": "fixture",
+    "created_at": "2026-01-05T16:34:00Z",
+    "sentiment_hint": "downgrade"
+  },
+  {
+    "headline": "AAPL posts record services growth in channel update",
+    "summary": "Channel checks suggest stronger recurring revenue growth and margin expansion.",
+    "source": "fixture",
+    "created_at": "2026-01-05T16:48:00Z",
+    "sentiment_hint": "record growth"
+  }
+]

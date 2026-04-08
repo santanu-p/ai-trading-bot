@@ -13,6 +13,8 @@ from tradingbot.enums import BotStatus, ExecutionIntentStatus, OperatorRole, Tra
 from tradingbot.models import (
     AgentRun,
     AuditLog,
+    BacktestReport,
+    BacktestTrade,
     BotSettings,
     ExecutionIntent,
     OrderFill,
@@ -21,14 +23,19 @@ from tradingbot.models import (
     PositionRecord,
     ReconciliationMismatch,
     RiskEvent,
+    TradeReview,
     TradeCandidate,
 )
 from tradingbot.schemas.settings import BotModeUpdate, BotStatusResponse
 from tradingbot.schemas.trading import (
     ActionResponse,
+    AgentDecision,
+    BacktestDetailResponse,
     AuditLogResponse,
     BacktestRequest,
     BacktestResponse,
+    BacktestSummaryResponse,
+    BacktestTradeResponse,
     CommitteeDecision,
     CurrentOperatorResponse,
     ExecutionIntentResponse,
@@ -43,8 +50,11 @@ from tradingbot.schemas.trading import (
     ReconciliationMismatchResponse,
     RiskEventResponse,
     RunResponse,
+    TradeReviewResponse,
+    TradeReviewSummaryResponse,
 )
 from tradingbot.services.adapters import ReplaceOrderRequest, build_broker_adapter
+from tradingbot.services.evaluation import TradeReviewService
 from tradingbot.services.execution import ExecutionService
 from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.store import ensure_bot_settings, live_trading_env_allowed, resolve_execution_support, strategy_profile_completed
@@ -76,6 +86,46 @@ def _build_replace_request(payload: OrderReplaceRequest) -> ReplaceOrderRequest:
         stop_price=payload.stop_price,
         take_profit=payload.take_profit,
         time_in_force=payload.time_in_force,
+    )
+
+
+def _serialize_backtest_summary(row: BacktestReport) -> BacktestSummaryResponse:
+    return BacktestSummaryResponse(
+        id=row.id,
+        task_id=row.task_id,
+        status=row.status,
+        symbols=row.symbols,
+        start_at=row.start_at,
+        end_at=row.end_at,
+        interval_minutes=row.interval_minutes,
+        created_at=row.created_at,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        total_trades=row.total_trades,
+        rejected_orders=row.rejected_orders,
+        final_equity=row.final_equity,
+        total_return_pct=row.total_return_pct,
+        win_rate=row.win_rate,
+        expectancy=row.expectancy,
+        sharpe_ratio=row.sharpe_ratio,
+        max_drawdown_pct=row.max_drawdown_pct,
+        turnover=row.turnover,
+        avg_exposure_pct=row.avg_exposure_pct,
+        max_exposure_pct=row.max_exposure_pct,
+        error_message=row.error_message,
+    )
+
+
+def _serialize_backtest_detail(row: BacktestReport, trades: list[BacktestTrade]) -> BacktestDetailResponse:
+    summary = _serialize_backtest_summary(row)
+    return BacktestDetailResponse(
+        **summary.model_dump(),
+        metrics=row.metrics_json,
+        walk_forward=row.walk_forward_json,
+        regime_breakdown=row.regime_breakdown_json,
+        equity_curve=row.equity_curve_json,
+        symbol_breakdown=row.symbol_breakdown_json,
+        trades=[BacktestTradeResponse.model_validate(item, from_attributes=True) for item in trades],
     )
 
 
@@ -330,7 +380,12 @@ def list_decisions(
             risk_notes=row.risk_notes,
             market_vote=row.raw_payload.get("market_vote"),
             news_vote=row.raw_payload.get("news_vote"),
+            chair_vote=row.raw_payload.get("chair_vote"),
             reject_reason=row.raw_payload.get("reject_reason"),
+            committee_notes=row.raw_payload.get("committee_notes", []),
+            agent_signals=[AgentDecision.model_validate(item) for item in row.raw_payload.get("agent_signals", [])],
+            model_name=row.raw_payload.get("model_name"),
+            prompt_versions=row.raw_payload.get("prompt_versions", {}),
         )
         for row in rows
     ]
@@ -526,6 +581,54 @@ def list_risk_events(
     return [RiskEventResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
+@router.get("/trade-reviews", response_model=list[TradeReviewResponse])
+def list_trade_reviews(
+    status: str | None = None,
+    loss_cause: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> list[TradeReviewResponse]:
+    query = select(TradeReview).order_by(TradeReview.created_at.desc())
+    if status:
+        query = query.where(TradeReview.status == status)
+    if loss_cause:
+        query = query.where(TradeReview.loss_cause == loss_cause)
+    rows = session.scalars(query.limit(limit)).all()
+    return [
+        TradeReviewResponse(
+            id=row.id,
+            source_run_id=row.source_run_id,
+            order_id=row.order_id,
+            symbol=row.symbol,
+            status=row.status,
+            model_name=row.model_name,
+            prompt_versions=row.prompt_versions_json,
+            review_score=row.review_score,
+            pnl=row.pnl,
+            return_pct=row.return_pct,
+            loss_cause=row.loss_cause,
+            summary=row.summary,
+            recurring_pattern_key=row.recurring_pattern_key,
+            review_payload=row.review_payload,
+            reviewed_at=row.reviewed_at,
+            created_at=row.created_at,
+        )
+        for row in rows
+    ]
+
+
+@router.get("/trade-reviews/summary", response_model=list[TradeReviewSummaryResponse])
+def summarize_trade_reviews(
+    limit: int = Query(default=100, ge=1, le=1000),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> list[TradeReviewSummaryResponse]:
+    service = TradeReviewService(session)
+    rows = service.summarize_model_performance(limit=limit)
+    return [TradeReviewSummaryResponse.model_validate(item) for item in rows]
+
+
 @router.get("/audit-logs", response_model=list[AuditLogResponse])
 def list_audit_logs(
     action: str | None = None,
@@ -599,6 +702,35 @@ def run_reconciliation_now(
     }
 
 
+@router.get("/backtests", response_model=list[BacktestSummaryResponse])
+def list_backtests(
+    status: str | None = None,
+    limit: int = Query(default=20, ge=1, le=200),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> list[BacktestSummaryResponse]:
+    query = select(BacktestReport).order_by(BacktestReport.created_at.desc())
+    if status:
+        query = query.where(BacktestReport.status == status)
+    rows = session.scalars(query.limit(limit)).all()
+    return [_serialize_backtest_summary(row) for row in rows]
+
+
+@router.get("/backtests/{report_id}", response_model=BacktestDetailResponse)
+def get_backtest_report(
+    report_id: str,
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> BacktestDetailResponse:
+    report = session.get(BacktestReport, report_id)
+    if report is None:
+        raise HTTPException(status_code=404, detail=f"Backtest report {report_id} was not found.")
+    trades = session.scalars(
+        select(BacktestTrade).where(BacktestTrade.report_id == report_id).order_by(BacktestTrade.signal_at.desc())
+    ).all()
+    return _serialize_backtest_detail(report, trades)
+
+
 @router.post("/backtests", response_model=BacktestResponse)
 def launch_backtest(
     payload: BacktestRequest,
@@ -607,15 +739,34 @@ def launch_backtest(
 ) -> BacktestResponse:
     if not payload.symbols:
         raise HTTPException(status_code=400, detail="At least one symbol is required.")
-    task = enqueue_backtest(payload)
+
+    report = BacktestReport(
+        status="queued",
+        symbols=[item.strip().upper() for item in payload.symbols if item.strip()],
+        start_at=payload.start,
+        end_at=payload.end,
+        interval_minutes=payload.interval_minutes,
+        initial_equity=payload.initial_equity,
+        slippage_bps=payload.slippage_bps,
+        commission_per_share=payload.commission_per_share,
+        fill_delay_bars=payload.fill_delay_bars,
+        reject_probability=payload.reject_probability,
+        max_holding_bars=payload.max_holding_bars,
+        random_seed=payload.random_seed,
+    )
+    session.add(report)
+    session.flush()
+
+    task = enqueue_backtest(payload, report.id)
+    report.task_id = task.id
     session.add(
         AuditLog(
             action="backtest.queued",
             actor=current.email,
             actor_role=current.role.value,
             session_id=current.session_id,
-            details={"task_id": task.id, "symbols": payload.symbols},
+            details={"task_id": task.id, "report_id": report.id, "symbols": report.symbols},
         )
     )
     session.commit()
-    return BacktestResponse(accepted=True, task_id=task.id)
+    return BacktestResponse(accepted=True, task_id=task.id, report_id=report.id)

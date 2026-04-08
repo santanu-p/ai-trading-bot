@@ -15,6 +15,7 @@ The dashboard is an operator console rather than a marketing site or analyst wor
 - `/orders`
 - `/decisions`
 - `/risk`
+- `/backtests`
 - `/settings`
 
 ## First-Run Intake
@@ -55,6 +56,7 @@ The dashboard polls the backend every 30 seconds for:
 - risk events
 - audit logs
 - operator sessions
+- backtest report summaries
 
 ### Actions
 
@@ -89,10 +91,20 @@ Overview displays:
 - broker capability coverage
 - current positions
 - committee feed
+- decision-time feature/event/timestamp context from scan payloads
 - audit log
 - run history
 
+Backtests displays:
+
+- research backtest launch form
+- persisted report history
+- report metrics (return/drawdown/sharpe/win rate/expectancy/turnover/exposure)
+- walk-forward window summary
+- regime-level performance breakdown
+
 Risk displays risk events, reconciliation mismatches, and audit history.
+Risk events now include explicit data-quality rejection codes when stale or incomplete feeds block symbols.
 
 Settings displays editable fields for all configurable guardrails and the watchlist plus live safety controls and session management.
 

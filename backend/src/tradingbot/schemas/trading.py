@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
+
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from tradingbot.enums import (
     ExecutionIntentStatus,
@@ -30,6 +32,18 @@ class AgentDecision(BaseModel):
     time_horizon: str
     vote: str
     reject_reason: str | None = None
+    supporting_facts: list[str] = Field(default_factory=list)
+    risk_flags: list[str] = Field(default_factory=list)
+
+
+class ChairSummary(BaseModel):
+    symbol: str
+    direction: OrderIntent
+    confidence: float = Field(ge=0, le=1)
+    time_horizon: str
+    vote: str
+    summary: str
+    dissenting_risks: list[str] = Field(default_factory=list)
 
 
 class CommitteeDecision(BaseModel):
@@ -45,7 +59,12 @@ class CommitteeDecision(BaseModel):
     reject_reason: str | None = None
     market_vote: str | None = None
     news_vote: str | None = None
+    chair_vote: str | None = None
     risk_notes: list[str] = Field(default_factory=list)
+    committee_notes: list[str] = Field(default_factory=list)
+    agent_signals: list[AgentDecision] = Field(default_factory=list)
+    model_name: str | None = None
+    prompt_versions: dict[str, str] = Field(default_factory=dict)
 
 
 class RiskCheckResult(BaseModel):
@@ -196,11 +215,108 @@ class BacktestRequest(BaseModel):
     start: datetime
     end: datetime
     interval_minutes: int = Field(default=5, ge=1, le=60)
+    initial_equity: float = Field(default=100_000, gt=0)
+    slippage_bps: float = Field(default=5.0, ge=0, le=200)
+    commission_per_share: float = Field(default=0.005, ge=0, le=10)
+    fill_delay_bars: int = Field(default=1, ge=0, le=20)
+    reject_probability: float = Field(default=0.03, ge=0, le=1)
+    max_holding_bars: int = Field(default=24, ge=1, le=500)
+    random_seed: int = Field(default=42, ge=1, le=10_000_000)
+
+    @model_validator(mode="after")
+    def validate_window(self) -> "BacktestRequest":
+        if self.end <= self.start:
+            raise ValueError("Backtest end must be after start.")
+        return self
 
 
 class BacktestResponse(BaseModel):
     accepted: bool
     task_id: str
+    report_id: str
+
+
+class BacktestSummaryResponse(BaseModel):
+    id: str
+    task_id: str | None = None
+    status: str
+    symbols: list[str]
+    start_at: datetime
+    end_at: datetime
+    interval_minutes: int
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    total_trades: int
+    rejected_orders: int
+    final_equity: float
+    total_return_pct: float
+    win_rate: float
+    expectancy: float
+    sharpe_ratio: float
+    max_drawdown_pct: float
+    turnover: float
+    avg_exposure_pct: float
+    max_exposure_pct: float
+    error_message: str | None = None
+
+
+class BacktestTradeResponse(BaseModel):
+    id: int
+    symbol: str
+    status: str
+    regime: str
+    signal_at: datetime
+    entry_at: datetime | None = None
+    exit_at: datetime | None = None
+    quantity: int
+    holding_bars: int
+    entry_price: float | None = None
+    exit_price: float | None = None
+    gross_pnl: float
+    net_pnl: float
+    return_pct: float
+    commission_paid: float
+    slippage_paid: float
+    notes: list[str]
+
+
+class TradeReviewResponse(BaseModel):
+    id: int
+    source_run_id: str | None = None
+    order_id: int
+    symbol: str
+    status: str
+    model_name: str | None = None
+    prompt_versions: dict[str, str]
+    review_score: float
+    pnl: float
+    return_pct: float
+    loss_cause: str | None = None
+    summary: str
+    recurring_pattern_key: str | None = None
+    review_payload: dict[str, Any]
+    reviewed_at: datetime | None = None
+    created_at: datetime
+
+
+class TradeReviewSummaryResponse(BaseModel):
+    model_name: str
+    prompt_signature: str
+    reviewed_trades: int
+    queued_reviews: int
+    avg_score: float
+    avg_return_pct: float
+    loss_causes: dict[str, int]
+
+
+class BacktestDetailResponse(BacktestSummaryResponse):
+    metrics: dict
+    walk_forward: list[dict]
+    regime_breakdown: list[dict]
+    equity_curve: list[dict]
+    symbol_breakdown: list[dict]
+    trades: list[BacktestTradeResponse]
 
 
 class LiveEnablePrepareResponse(BaseModel):

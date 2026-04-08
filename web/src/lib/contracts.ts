@@ -309,3 +309,77 @@ export interface ActionResponse {
   accepted: boolean;
   detail: string;
 }
+
+export interface BacktestRequestPayload {
+  symbols: string[];
+  start: string;
+  end: string;
+  interval_minutes: number;
+  initial_equity: number;
+  slippage_bps: number;
+  commission_per_share: number;
+  fill_delay_bars: number;
+  reject_probability: number;
+  max_holding_bars: number;
+  random_seed: number;
+}
+
+export interface BacktestResponse {
+  accepted: boolean;
+  task_id: string;
+  report_id: string;
+}
+
+export interface BacktestSummaryResponse {
+  id: string;
+  task_id?: string | null;
+  status: string;
+  symbols: string[];
+  start_at: string;
+  end_at: string;
+  interval_minutes: number;
+  created_at: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  total_trades: number;
+  rejected_orders: number;
+  final_equity: number;
+  total_return_pct: number;
+  win_rate: number;
+  expectancy: number;
+  sharpe_ratio: number;
+  max_drawdown_pct: number;
+  turnover: number;
+  avg_exposure_pct: number;
+  max_exposure_pct: number;
+  error_message?: string | null;
+}
+
+export interface BacktestTradeResponse {
+  id: number;
+  symbol: string;
+  status: string;
+  regime: string;
+  signal_at: string;
+  entry_at?: string | null;
+  exit_at?: string | null;
+  quantity: number;
+  holding_bars: number;
+  entry_price?: number | null;
+  exit_price?: number | null;
+  gross_pnl: number;
+  net_pnl: number;
+  return_pct: number;
+  commission_paid: number;
+  slippage_paid: number;
+  notes: string[];
+}
+
+export interface BacktestDetailResponse extends BacktestSummaryResponse {
+  metrics: Record<string, unknown>;
+  walk_forward: Record<string, unknown>[];
+  regime_breakdown: Record<string, unknown>[];
+  equity_curve: Record<string, unknown>[];
+  symbol_breakdown: Record<string, unknown>[];
+  trades: BacktestTradeResponse[];
+}

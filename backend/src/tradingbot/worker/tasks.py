@@ -1,22 +1,35 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from celery.result import AsyncResult
 from sqlalchemy import select
 
 from tradingbot.config import get_settings
 from tradingbot.db import get_session_factory
-from tradingbot.enums import BotStatus, RiskDecision, RunStatus, TradingMode
-from tradingbot.models import AgentRun, BotSettings, PortfolioSnapshot, PositionRecord, RiskEvent, TradeCandidate, WatchlistSymbol
-from tradingbot.schemas.trading import BacktestRequest, RiskCheckResult
+from tradingbot.enums import BotStatus, OrderIntent, RiskDecision, RunStatus, TradingMode, TradingPattern
+from tradingbot.models import (
+    AgentRun,
+    BacktestReport,
+    BacktestTrade,
+    BotSettings,
+    PortfolioSnapshot,
+    PositionRecord,
+    RiskEvent,
+    TradeCandidate,
+    WatchlistSymbol,
+)
+from tradingbot.schemas.trading import BacktestRequest, CommitteeDecision, RiskCheckResult
 from tradingbot.services.adapters import build_broker_adapter, build_market_data_adapter, build_news_adapter
-from tradingbot.services.agents import AgentRunner
-from tradingbot.services.backtest import BacktestService
+from tradingbot.services.agents import AgentOutputError, AgentRunner
+from tradingbot.services.backtest import BacktestService, BacktestSimulationConfig
 from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.committee import CommitteeService
+from tradingbot.services.data_quality import DataQualityPolicy, DataQualityValidator
+from tradingbot.services.events import extract_structured_events, serialize_structured_events
 from tradingbot.services.execution import ExecutionService
-from tradingbot.services.indicators import bar_summary
+from tradingbot.services.features import IndexContext, build_feature_snapshot, infer_market_index_context
 from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.risk import RiskEngine, RiskPolicy
 from tradingbot.services.store import (
@@ -42,8 +55,86 @@ def _build_risk_engine(settings_row: BotSettings) -> RiskEngine:
     )
 
 
-def enqueue_backtest(payload: BacktestRequest) -> AsyncResult:
-    return run_backtest.delay(payload.model_dump(mode="json"))
+def _requires_timely_news(pattern: TradingPattern | None) -> bool:
+    if pattern is None:
+        return True
+    return pattern not in {TradingPattern.DELIVERY, TradingPattern.POSITIONAL}
+
+
+def _quality_rejection_decision(
+    *,
+    symbol: str,
+    feature_snapshot: dict[str, float],
+    notes: list[str],
+) -> CommitteeDecision:
+    reference = max(feature_snapshot.get("last_close", 0.0), 0.01)
+    return CommitteeDecision(
+        symbol=symbol,
+        direction=OrderIntent.HOLD,
+        confidence=0.0,
+        entry=round(reference, 4),
+        stop_loss=round(max(reference * 0.995, 0.01), 4),
+        take_profit=round(reference * 1.005, 4),
+        time_horizon="intraday",
+        status=RiskDecision.REJECTED,
+        thesis="Trade rejected before agent inference due to failed data-quality checks.",
+        reject_reason="; ".join(notes),
+        market_vote="reject",
+        news_vote="reject",
+        risk_notes=notes,
+    )
+
+
+def _agent_rejection_decision(
+    *,
+    symbol: str,
+    feature_snapshot: dict[str, float],
+    notes: list[str],
+) -> CommitteeDecision:
+    reference = max(feature_snapshot.get("last_close", 0.0), 0.01)
+    return CommitteeDecision(
+        symbol=symbol,
+        direction=OrderIntent.HOLD,
+        confidence=0.0,
+        entry=round(reference, 4),
+        stop_loss=round(max(reference * 0.995, 0.01), 4),
+        take_profit=round(reference * 1.005, 4),
+        time_horizon="intraday",
+        status=RiskDecision.REJECTED,
+        thesis="Trade rejected because committee agent output could not be repaired into a valid schema.",
+        reject_reason="; ".join(notes),
+        market_vote="reject",
+        news_vote="reject",
+        chair_vote="reject",
+        risk_notes=notes,
+    )
+
+
+def _decision_payload(
+    *,
+    decision: CommitteeDecision,
+    feature_snapshot: dict[str, float],
+    data_quality_payload: dict[str, object],
+    data_timestamps: dict[str, str | None],
+    structured_events: list[dict[str, object]],
+    index_context: IndexContext,
+    committee_metadata: dict[str, Any] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = decision.model_dump(mode="json")
+    payload["feature_snapshot"] = feature_snapshot
+    payload["data_quality"] = data_quality_payload
+    payload["data_timestamps"] = data_timestamps
+    payload["structured_events"] = structured_events
+    payload["market_index_context"] = index_context.to_payload()
+    if committee_metadata is not None:
+        payload["committee_metadata"] = committee_metadata
+    return payload
+
+
+def enqueue_backtest(payload: BacktestRequest, report_id: str) -> AsyncResult:
+    serialized = payload.model_dump(mode="json")
+    serialized["report_id"] = report_id
+    return run_backtest.delay(serialized)
 
 
 @celery_app.task(name="tradingbot.worker.tasks.run_market_scan")
@@ -157,6 +248,36 @@ def run_market_scan() -> dict[str, int]:
         queued = 0
         trading_profile = serialize_trading_profile(settings_row)
         executor_block_reason = execution_support.analysis_only_downgrade_reason
+        data_quality = DataQualityValidator(
+            DataQualityPolicy(
+                max_bar_staleness_minutes=max(15, settings_row.scan_interval_minutes * 3),
+                max_news_staleness_minutes=max(45, settings_row.scan_interval_minutes * 12),
+                max_missing_candle_ratio=0.12,
+                abnormal_gap_multiplier=4.0,
+            )
+        )
+        index_bars: dict[str, list] = {}
+        for index_symbol in ("SPY", "QQQ"):
+            try:
+                index_bars[index_symbol] = market_data.get_intraday_bars(
+                    index_symbol,
+                    start=start,
+                    end=end,
+                    interval_minutes=settings_row.scan_interval_minutes,
+                )
+            except Exception as exc:  # noqa: BLE001
+                index_bars[index_symbol] = []
+                session.add(
+                    RiskEvent(
+                        symbol=index_symbol,
+                        severity="warning",
+                        code="index_context_unavailable",
+                        message="Failed to fetch bars for market-index context.",
+                        payload={"error": str(exc)},
+                    )
+                )
+        index_context = infer_market_index_context(index_bars)
+        session.commit()
 
         for item in watchlist:
             run = AgentRun(symbol=item.symbol, status=RunStatus.RUNNING, started_at=end)
@@ -172,11 +293,114 @@ def run_market_scan() -> dict[str, int]:
                 )
                 if not bars:
                     raise RuntimeError("No market bars returned.")
-                indicators = bar_summary(bars)
+                feature_snapshot = build_feature_snapshot(
+                    bars,
+                    interval_minutes=settings_row.scan_interval_minutes,
+                    index_context=index_context,
+                )
                 news = news_data.get_recent_news(item.symbol, limit=8)
-                market_decision = agent_runner.market_agent(item.symbol, indicators, trading_profile)
-                news_decision = agent_runner.news_agent(item.symbol, news, trading_profile)
-                proposal = committee.propose(market_decision, news_decision)
+                structured_events = extract_structured_events(
+                    item.symbol,
+                    news,
+                    as_of=end,
+                    index_context=index_context,
+                )
+                structured_event_payload = serialize_structured_events(structured_events)
+                quality_report = data_quality.evaluate(
+                    symbol=item.symbol,
+                    bars=bars,
+                    news_items=news,
+                    interval_minutes=settings_row.scan_interval_minutes,
+                    now=end,
+                    requires_timely_news=_requires_timely_news(settings_row.trading_pattern),
+                )
+                if not quality_report.passed:
+                    rejection_notes = quality_report.rejection_notes() or ["Data quality checks failed."]
+                    quality_reject = _quality_rejection_decision(
+                        symbol=item.symbol,
+                        feature_snapshot=feature_snapshot,
+                        notes=rejection_notes,
+                    )
+                    quality_payload = _decision_payload(
+                        decision=quality_reject,
+                        feature_snapshot=feature_snapshot,
+                        data_quality_payload=quality_report.to_payload(),
+                        data_timestamps=quality_report.data_timestamps,
+                        structured_events=structured_event_payload,
+                        index_context=index_context,
+                    )
+                    session.add(
+                        TradeCandidate(
+                            run_id=run.id,
+                            symbol=quality_reject.symbol,
+                            direction=quality_reject.direction,
+                            confidence=quality_reject.confidence,
+                            status=quality_reject.status.value,
+                            thesis=quality_reject.thesis,
+                            entry=quality_reject.entry,
+                            stop_loss=quality_reject.stop_loss,
+                            take_profit=quality_reject.take_profit,
+                            risk_notes=quality_reject.risk_notes,
+                            raw_payload=quality_payload,
+                        )
+                    )
+                    run.status = RunStatus.SUCCEEDED
+                    run.finished_at = datetime.now(UTC)
+                    run.decision_payload = quality_payload
+                    session.add(
+                        RiskEvent(
+                            symbol=item.symbol,
+                            severity="critical",
+                            code="data_quality_rejected",
+                            message="Scan data-quality checks rejected the symbol before agent inference.",
+                            payload={
+                                "notes": rejection_notes,
+                                "issues": quality_report.to_payload()["issues"],
+                                "data_timestamps": quality_report.data_timestamps,
+                            },
+                        )
+                    )
+                    session.commit()
+                    continue
+
+                portfolio_context = {
+                    "equity": round(account.equity, 4),
+                    "buying_power": round(account.buying_power, 4),
+                    "daily_pl": round(account.daily_pl, 4),
+                    "open_positions": open_positions,
+                    "current_symbol_exposure": round(execution.current_symbol_exposure(item.symbol), 4),
+                    "portfolio_exposure": round(sum(position.market_value for position in broker_positions), 4),
+                    "positions": [
+                        {
+                            "symbol": position.symbol,
+                            "market_value": round(position.market_value, 4),
+                            "unrealized_pl": round(position.unrealized_pl, 4),
+                            "side": position.side,
+                        }
+                        for position in broker_positions[:10]
+                    ],
+                }
+                committee_result = agent_runner.run_structured_committee(
+                    symbol=item.symbol,
+                    trading_profile=trading_profile,
+                    feature_snapshot=feature_snapshot,
+                    news_items=news,
+                    structured_events=structured_event_payload,
+                    data_quality=quality_report.to_payload(),
+                    portfolio_context=portfolio_context,
+                )
+                run.model_name = committee_result.model_name
+                run.prompt_versions_json = committee_result.prompt_versions
+                run.input_snapshot_json = committee_result.shared_input_snapshot
+                proposal = committee.propose(
+                    *committee_result.specialist_signals,
+                    chair_summary=committee_result.chair_summary,
+                ).model_copy(
+                    update={
+                        "model_name": committee_result.model_name,
+                        "prompt_versions": committee_result.prompt_versions,
+                    }
+                )
                 if execution_support.supported_for_execution is None:
                     risk_result = RiskCheckResult(
                         decision=RiskDecision.REJECTED,
@@ -194,6 +418,15 @@ def run_market_scan() -> dict[str, int]:
                         is_symbol_in_cooldown=False,
                     )
                 decision = committee.finalize(proposal, risk_result=risk_result)
+                decision_payload = _decision_payload(
+                    decision=decision,
+                    feature_snapshot=feature_snapshot,
+                    data_quality_payload=quality_report.to_payload(),
+                    data_timestamps=quality_report.data_timestamps,
+                    structured_events=structured_event_payload,
+                    index_context=index_context,
+                    committee_metadata=committee_result.to_payload(),
+                )
 
                 session.add(
                     TradeCandidate(
@@ -207,12 +440,12 @@ def run_market_scan() -> dict[str, int]:
                         stop_loss=decision.stop_loss,
                         take_profit=decision.take_profit,
                         risk_notes=decision.risk_notes,
-                        raw_payload=decision.model_dump(mode="json"),
+                        raw_payload=decision_payload,
                     )
                 )
                 run.status = RunStatus.SUCCEEDED
                 run.finished_at = datetime.now(UTC)
-                run.decision_payload = decision.model_dump(mode="json")
+                run.decision_payload = decision_payload
                 session.commit()
 
                 if decision.status.value == "approved":
@@ -239,6 +472,65 @@ def run_market_scan() -> dict[str, int]:
                         )
                     )
                     session.commit()
+            except AgentOutputError as exc:
+                rejection_notes = [
+                    f"Malformed committee output from role {exc.role}.",
+                    exc.invocation.error_message or "Agent output validation failed after repair.",
+                ]
+                agent_reject = _agent_rejection_decision(
+                    symbol=item.symbol,
+                    feature_snapshot=feature_snapshot,
+                    notes=rejection_notes,
+                ).model_copy(
+                    update={
+                        "model_name": agent_runner.model_name,
+                        "prompt_versions": {exc.invocation.prompt_key: exc.invocation.prompt_version},
+                    }
+                )
+                agent_payload = _decision_payload(
+                    decision=agent_reject,
+                    feature_snapshot=feature_snapshot,
+                    data_quality_payload=quality_report.to_payload(),
+                    data_timestamps=quality_report.data_timestamps,
+                    structured_events=structured_event_payload,
+                    index_context=index_context,
+                    committee_metadata={
+                        "model_name": agent_runner.model_name,
+                        "prompt_versions": {exc.invocation.prompt_key: exc.invocation.prompt_version},
+                        "failed_invocation": exc.invocation.to_payload(),
+                    },
+                )
+                run.status = RunStatus.SUCCEEDED
+                run.finished_at = datetime.now(UTC)
+                run.model_name = agent_runner.model_name
+                run.prompt_versions_json = {exc.invocation.prompt_key: exc.invocation.prompt_version}
+                run.input_snapshot_json = exc.invocation.input_snapshot
+                run.decision_payload = agent_payload
+                session.add(
+                    TradeCandidate(
+                        run_id=run.id,
+                        symbol=agent_reject.symbol,
+                        direction=agent_reject.direction,
+                        confidence=agent_reject.confidence,
+                        status=agent_reject.status.value,
+                        thesis=agent_reject.thesis,
+                        entry=agent_reject.entry,
+                        stop_loss=agent_reject.stop_loss,
+                        take_profit=agent_reject.take_profit,
+                        risk_notes=agent_reject.risk_notes,
+                        raw_payload=agent_payload,
+                    )
+                )
+                session.add(
+                    RiskEvent(
+                        symbol=item.symbol,
+                        severity="warning",
+                        code="agent_output_malformed",
+                        message="Committee processing rejected the trade because a specialist payload stayed malformed after repair.",
+                        payload={"role": exc.role, "invocation": exc.invocation.to_payload()},
+                    )
+                )
+                session.commit()
             except Exception as exc:  # noqa: BLE001
                 run.status = RunStatus.FAILED
                 run.finished_at = datetime.now(UTC)
@@ -294,21 +586,111 @@ def run_reconciliation() -> dict[str, int]:
 @celery_app.task(name="tradingbot.worker.tasks.run_backtest")
 def run_backtest(payload: dict) -> dict[str, int]:
     request = BacktestRequest.model_validate(payload)
+    report_id = str(payload.get("report_id", "")).strip() or None
     session = get_session_factory()()
     try:
+        now = datetime.now(UTC)
+        report = session.get(BacktestReport, report_id) if report_id else None
+        if report is not None:
+            report.status = "running"
+            report.started_at = now
+            report.error_message = None
+            session.commit()
+
         settings_row = ensure_bot_settings(session)
         market_data = build_market_data_adapter(settings_row)
         news_data = build_news_adapter(settings_row)
-        agent_runner = AgentRunner(settings_row.openai_model)
-        committee = CommitteeService(settings_row.consensus_threshold, get_settings().min_approval_votes)
-        risk_engine = _build_risk_engine(settings_row)
-        service = BacktestService(market_data, news_data, agent_runner, committee, risk_engine)
+        service = BacktestService(market_data, news_data)
         trading_profile = serialize_trading_profile(settings_row)
+        simulation_config = BacktestSimulationConfig(
+            initial_equity=request.initial_equity,
+            slippage_bps=request.slippage_bps,
+            commission_per_share=request.commission_per_share,
+            fill_delay_bars=request.fill_delay_bars,
+            reject_probability=request.reject_probability,
+            max_holding_bars=request.max_holding_bars,
+            random_seed=request.random_seed,
+        )
+        result = service.run_research(
+            symbols=request.symbols,
+            start=request.start,
+            end=request.end,
+            interval_minutes=request.interval_minutes,
+            trading_profile=trading_profile,
+            config=simulation_config,
+        )
 
-        slices = []
-        for symbol in request.symbols:
-            slices.extend(service.replay_symbol(symbol, request.start, request.end, request.interval_minutes, trading_profile))
+        if report is None:
+            report = BacktestReport(
+                symbols=request.symbols,
+                start_at=request.start,
+                end_at=request.end,
+                interval_minutes=request.interval_minutes,
+                initial_equity=request.initial_equity,
+                slippage_bps=request.slippage_bps,
+                commission_per_share=request.commission_per_share,
+                fill_delay_bars=request.fill_delay_bars,
+                reject_probability=request.reject_probability,
+                max_holding_bars=request.max_holding_bars,
+                random_seed=request.random_seed,
+            )
+            session.add(report)
+            session.flush()
 
-        return {"runs": len(slices)}
+        summary = result.metrics
+        report.status = "succeeded"
+        report.finished_at = datetime.now(UTC)
+        report.total_trades = int(summary["total_trades"])
+        report.rejected_orders = int(summary["rejected_orders"])
+        report.final_equity = float(summary["final_equity"])
+        report.total_return_pct = float(summary["total_return_pct"])
+        report.win_rate = float(summary["win_rate"])
+        report.expectancy = float(summary["expectancy"])
+        report.sharpe_ratio = float(summary["sharpe_ratio"])
+        report.max_drawdown_pct = float(summary["max_drawdown_pct"])
+        report.turnover = float(summary["turnover"])
+        report.avg_exposure_pct = float(summary["avg_exposure_pct"])
+        report.max_exposure_pct = float(summary["max_exposure_pct"])
+        report.metrics_json = result.metrics
+        report.walk_forward_json = result.walk_forward
+        report.regime_breakdown_json = result.regime_breakdown
+        report.equity_curve_json = result.equity_curve_payload()
+        report.symbol_breakdown_json = result.symbol_breakdown
+        report.error_message = None
+
+        session.query(BacktestTrade).filter(BacktestTrade.report_id == report.id).delete(synchronize_session=False)
+        for item in result.trades:
+            session.add(
+                BacktestTrade(
+                    report_id=report.id,
+                    symbol=item.symbol,
+                    status=item.status,
+                    regime=item.regime,
+                    signal_at=item.signal_at,
+                    entry_at=item.entry_at,
+                    exit_at=item.exit_at,
+                    quantity=item.quantity,
+                    holding_bars=item.holding_bars,
+                    entry_price=item.entry_price,
+                    exit_price=item.exit_price,
+                    gross_pnl=item.gross_pnl,
+                    net_pnl=item.net_pnl,
+                    return_pct=item.return_pct,
+                    commission_paid=item.commission_paid,
+                    slippage_paid=item.slippage_paid,
+                    notes=item.notes,
+                )
+            )
+        session.commit()
+        return {"runs": report.total_trades, "rejected_orders": report.rejected_orders}
+    except Exception as exc:  # noqa: BLE001
+        if report_id:
+            report = session.get(BacktestReport, report_id)
+            if report is not None:
+                report.status = "failed"
+                report.finished_at = datetime.now(UTC)
+                report.error_message = str(exc)
+                session.commit()
+        raise
     finally:
         session.close()

@@ -1,0 +1,95 @@
+{
+  "metrics": {
+    "total_trades": 3,
+    "rejected_orders": 0,
+    "final_equity": 101600.885432,
+    "total_return_pct": 1.600885,
+    "win_rate": 100.0,
+    "expectancy": 533.628477,
+    "sharpe_ratio": 73.924782,
+    "max_drawdown_pct": 0.037305,
+    "turnover": 4.537534,
+    "avg_exposure_pct": 38.498983,
+    "max_exposure_pct": 83.350074
+  },
+  "trade_count": 3,
+  "rejected_orders": 0,
+  "regime_breakdown": [
+    {
+      "regime": "chop",
+      "trades": 1,
+      "rejected_orders": 0,
+      "win_rate": 100.0,
+      "expectancy": 535.621384,
+      "avg_return_pct": 0.642701,
+      "net_pnl": 535.621384
+    },
+    {
+      "regime": "event_heavy",
+      "trades": 2,
+      "rejected_orders": 0,
+      "win_rate": 100.0,
+      "expectancy": 532.632024,
+      "avg_return_pct": 0.74067,
+      "net_pnl": 1065.264048
+    }
+  ],
+  "walk_forward": [
+    {
+      "window": "train",
+      "start": "2026-01-05T14:30:00+00:00",
+      "end": "2026-01-05T15:57:00+00:00",
+      "trades": 2,
+      "rejected_orders": 0,
+      "total_return_pct": 0.660795,
+      "win_rate": 100.0,
+      "expectancy": 330.39757,
+      "sharpe_ratio": 46.028235,
+      "max_drawdown_pct": 0.037305
+    },
+    {
+      "window": "validation",
+      "start": "2026-01-05T15:57:00+00:00",
+      "end": "2026-01-05T16:26:00+00:00",
+      "trades": 0,
+      "rejected_orders": 0,
+      "total_return_pct": 0.0,
+      "win_rate": 0.0,
+      "expectancy": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown_pct": 0.0
+    },
+    {
+      "window": "test",
+      "start": "2026-01-05T16:26:00+00:00",
+      "end": "2026-01-05T16:55:00+00:00",
+      "trades": 0,
+      "rejected_orders": 0,
+      "total_return_pct": 0.0,
+      "win_rate": 0.0,
+      "expectancy": 0.0,
+      "sharpe_ratio": 0.0,
+      "max_drawdown_pct": 0.0
+    }
+  ],
+  "first_trade": {
+    "symbol": "AAPL",
+    "status": "filled",
+    "regime": "chop",
+    "signal_at": "2026-01-05T15:20:00+00:00",
+    "entry_at": "2026-01-05T15:25:00+00:00",
+    "exit_at": "2026-01-05T15:30:00+00:00",
+    "quantity": 550,
+    "holding_bars": 2,
+    "entry_price": 151.525725,
+    "exit_price": 152.509582,
+    "gross_pnl": 541.121384,
+    "net_pnl": 535.621384,
+    "return_pct": 0.006427,
+    "commission_paid": 5.5,
+    "slippage_paid": 83.609866,
+    "notes": [
+      "Take profit hit."
+    ]
+  }
+}

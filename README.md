@@ -18,9 +18,25 @@ No dependencies were installed and no services were started while creating this 
 - exchange-session and trading-calendar gating with half-day and end-of-session flatten rules
 - queued execution intents with a dedicated execution worker boundary
 - secure HTTP-only operator sessions with role-based access for `reviewer`, `operator`, and `admin`
+- persisted Phase 3 research backtests with:
+  - slippage + commission modeling
+  - delayed fill and rejected-order simulation
+  - walk-forward train/validation/test scoring
+  - regime breakdown (trend/chop/gap-driven/event-heavy)
+  - per-report equity-curve and per-trade simulation history
+- Phase 4 data-depth upgrades with:
+  - richer feature engineering (volatility/gap/ATR/relative-volume/opening-range/multi-timeframe alignment)
+  - SPY/QQQ index context merged into symbol features
+  - structured event extraction (earnings/analyst/macro/sector/calendar context)
+  - scan-time data-quality gating (stale bars, delayed news, missing candles, feed-gap detection)
+  - decision payload timestamp/quality/feature/event audit tags
+- Phase 5 agent-intelligence upgrades with:
+  - structured specialist committee (technical/catalyst/regime/portfolio/execution-quality plus chair)
+  - prompt registry with persisted per-run model and prompt-version lineage
+  - schema-repair retries for malformed agent outputs
+  - post-trade review queue and grouped review summaries by model/prompt signature
 - Multi-agent committee shape:
-  - market agent
-  - news agent
+  - structured specialist committee
   - deterministic risk engine
   - execution intent handoff
   - execution service
@@ -34,6 +50,7 @@ No dependencies were installed and no services were started while creating this 
   - audit-log visibility
   - settings and watchlist updates
   - decision/order/risk visibility
+  - backtest launch and report review
 - Shared decision contract in [committee-decision.schema.json](contracts/committee-decision.schema.json)
 
 ## What This Repo Does Not Yet Do
@@ -74,11 +91,13 @@ No dependencies were installed and no services were started while creating this 
 3. Alembic migrations manage schema changes before the API and worker start.
 4. The worker wakes up on schedule, checks bot state, and enforces market-session rules.
 5. For each enabled watchlist symbol, the worker fetches Alpaca bars and Alpaca news.
-6. The market and news agents produce structured decisions and the committee proposes a trade.
-7. The risk engine deterministically approves or rejects it.
-8. Approved decisions are persisted as execution intents instead of being submitted inline.
-9. Operators review live intents when required, and the execution worker re-checks market hours, kill switch, broker connectivity, and live gates before broker submission.
-10. The dashboard polls the backend for settings, intents, runs, orders, sessions, audit logs, and risk state.
+6. The worker computes engineered features, merges index context, extracts structured events, and validates data freshness/feed integrity.
+7. A specialist committee produces structured decisions, the chair summarizes them, and malformed outputs get one repair pass before rejection.
+8. The risk engine deterministically approves or rejects the committee proposal.
+9. Approved decisions are persisted as execution intents instead of being submitted inline.
+10. Operators review live intents when required, and the execution worker re-checks market hours, kill switch, broker connectivity, and live gates before broker submission.
+11. Filled exits generate post-trade reviews tied back to model/prompt lineage when that data is available.
+12. The dashboard and API poll/read settings, intents, runs, orders, sessions, audit logs, risk state, and review queues.
 
 ## Documentation
 
@@ -103,4 +122,4 @@ No dependencies were installed and no services were started while creating this 
 ## Notes
 
 - Some transient Python cache artifacts may exist from parse attempts that were blocked by the Windows sandbox; they are ignored by `.gitignore`.
-- The current repository now includes the Phase 1 foundation work, but it is still not a production-hardened trading system.
+- The current repository now includes Phase 0-5 roadmap work, but it is still not a production-hardened trading system.

@@ -20,6 +20,7 @@ from tradingbot.services.adapters import (
 )
 from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.contracts import ContractMasterService
+from tradingbot.services.evaluation import TradeReviewService
 from tradingbot.services.pretrade import PreTradeValidator
 
 TERMINAL_STATUSES = {
@@ -93,6 +94,7 @@ class ExecutionService:
         self.broker = broker
         self.contract_master = ContractMasterService(session)
         self.pretrade = PreTradeValidator(session, self.contract_master)
+        self.trade_reviews = TradeReviewService(session)
 
     def queue_trade_intent(
         self,
@@ -358,6 +360,7 @@ class ExecutionService:
             source="local",
             message="Local order intent created.",
             payload={"client_order_id": client_order_id},
+            force=True,
         )
 
         try:
@@ -528,6 +531,8 @@ class ExecutionService:
             force=True,
         )
         self._apply_fill_to_position(order.symbol, fill.quantity, fill.price, fill.side)
+        if target_status == OrderStatus.FILLED and order.direction == OrderIntent.SELL:
+            self.trade_reviews.queue_review_for_exit_order(order)
         return True
 
     def sync_positions_snapshot(self, broker_positions: list[BrokerPosition], *, source: str) -> None:
@@ -741,7 +746,14 @@ class ExecutionService:
         )
         self.session.add(local_child)
         self.session.flush()
-        self._transition_order(local_child, to_status=OrderStatus.NEW, source="local", message=reason, payload={})
+        self._transition_order(
+            local_child,
+            to_status=OrderStatus.NEW,
+            source="local",
+            message=reason,
+            payload={},
+            force=True,
+        )
         broker_child = self.broker.place_order(request)
         self.apply_broker_order_update(local_child, broker_child, source="repair")
 
@@ -775,7 +787,7 @@ class ExecutionService:
             to_status = OrderStatus.SUSPENDED
             message = f"Order moved to suspended due to invalid transition attempt: {message}"
 
-        if current_status == to_status:
+        if current_status == to_status and not force:
             return False
 
         transition = OrderStateTransition(

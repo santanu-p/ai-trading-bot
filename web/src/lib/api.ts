@@ -1,6 +1,10 @@
 import type {
   ActionResponse,
   AuditLogResponse,
+  BacktestDetailResponse,
+  BacktestRequestPayload,
+  BacktestResponse,
+  BacktestSummaryResponse,
   BotSettingsUpdatePayload,
   BotSettingsResponse,
   CommitteeDecision,
@@ -193,6 +197,22 @@ export async function runReconciliation() {
     unresolved_mismatches: number;
     live_paused: number;
   }>("/reconciliation/run", { method: "POST" });
+}
+
+export async function launchBacktest(payload: BacktestRequestPayload) {
+  return request<BacktestResponse>("/backtests", { method: "POST", json: payload });
+}
+
+export async function listBacktests(status?: string, limit = 20) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) {
+    params.set("status", status);
+  }
+  return request<BacktestSummaryResponse[]>(`/backtests?${params.toString()}`);
+}
+
+export async function getBacktestReport(reportId: string) {
+  return request<BacktestDetailResponse>(`/backtests/${reportId}`);
 }
 
 export async function startBot() {

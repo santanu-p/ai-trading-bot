@@ -154,8 +154,11 @@ class ContractMasterService:
         if not rows:
             return None
 
+        target_expiry_utc = _normalize_datetime(target_expiry)
+
         def _score(contract: InstrumentContract) -> tuple[float, float]:
-            expiry_score = abs((contract.expiry or target_expiry) - target_expiry)
+            contract_expiry = _normalize_datetime(contract.expiry) if contract.expiry else target_expiry_utc
+            expiry_score = abs(contract_expiry - target_expiry_utc)
             strike_score = abs((contract.strike_price or target_strike) - target_strike)
             return (expiry_score.total_seconds(), strike_score)
 
@@ -188,3 +191,9 @@ class ContractMasterService:
                 return candidate
 
         return candidates[-1]
+
+
+def _normalize_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)

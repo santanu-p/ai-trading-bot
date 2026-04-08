@@ -11,11 +11,14 @@
 
 1. Log into the dashboard.
 2. Confirm the bot is in the intended mode.
-3. Confirm the kill switch is off.
-4. Confirm watchlist and risk limits.
-5. Start the bot.
-6. Monitor decisions, orders, and risk events.
-7. Stop the bot if event quality degrades or provider failures accumulate.
+3. Confirm `live_enabled` is in the intended state (live only).
+4. Confirm the kill switch is off.
+5. Confirm watchlist and risk limits.
+6. Start the bot.
+7. Review pending execution intents and approve/reject as needed.
+8. Monitor decisions, orders, reconciliation mismatches, and risk events.
+9. Use the Backtests view to run replay studies before changing thresholds or model settings.
+10. Stop the bot if event quality degrades or provider failures accumulate.
 
 ## Kill Switch Guidance
 
@@ -32,6 +35,9 @@ Use the kill switch when:
 - `scan_failure`
 - `trade_rejected`
 - `risk_rejected`
+- `pretrade_rejected`
+- `broker_submit_failed`
+- `reconciliation_unresolved`
 
 ## Before Any Live Use
 
@@ -45,9 +51,6 @@ Use the kill switch when:
 
 ## Current Operational Gaps
 
-- no manual approval queue
-- no reconciliation worker
 - no alerting integration
-- no explicit exchange holiday calendar enforcement
 - no persistent metrics/trace pipeline
-
+- no websocket event stream from the broker into the dashboard

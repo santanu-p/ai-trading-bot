@@ -62,13 +62,105 @@
     "news_vote": {
       "type": ["string", "null"]
     },
+    "chair_vote": {
+      "type": ["string", "null"]
+    },
     "risk_notes": {
       "type": "array",
       "items": {
+        "type": "string"
+      }
+    },
+    "committee_notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "agent_signals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "symbol",
+          "direction",
+          "confidence",
+          "thesis",
+          "entry",
+          "stop_loss",
+          "take_profit",
+          "time_horizon",
+          "vote"
+        ],
+        "properties": {
+          "role": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 10
+          },
+          "direction": {
+            "type": "string",
+            "enum": ["buy", "sell", "hold"]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "thesis": {
+            "type": "string",
+            "minLength": 1
+          },
+          "entry": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "stop_loss": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "take_profit": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "time_horizon": {
+            "type": "string"
+          },
+          "vote": {
+            "type": "string"
+          },
+          "reject_reason": {
+            "type": ["string", "null"]
+          },
+          "supporting_facts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "risk_flags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "model_name": {
+      "type": ["string", "null"]
+    },
+    "prompt_versions": {
+      "type": "object",
+      "additionalProperties": {
         "type": "string"
       }
     }
   },
   "additionalProperties": false
 }
-

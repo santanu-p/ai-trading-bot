@@ -193,6 +193,16 @@ class NewsAdapter(Protocol):
     def get_recent_news(self, symbol: str, *, limit: int = 10) -> list[NewsItem]:
         ...
 
+    def get_news_between(
+        self,
+        symbol: str,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int = 200,
+    ) -> list[NewsItem]:
+        ...
+
 
 class AlpacaRESTMixin:
     def __init__(self) -> None:
@@ -453,6 +463,36 @@ class AlpacaMarketDataAdapter(AlpacaRESTMixin):
 class AlpacaNewsAdapter(AlpacaRESTMixin):
     def get_recent_news(self, symbol: str, *, limit: int = 10) -> list[NewsItem]:
         params = {"symbols": symbol, "limit": limit, "sort": "desc"}
+        payload = self._request_json(self.settings.alpaca_data_base_url, "/v1beta1/news", params=params)
+        items = payload.get("news", payload)
+        if not isinstance(items, list):
+            return []
+        return [
+            NewsItem(
+                headline=item.get("headline", ""),
+                summary=item.get("summary", ""),
+                source=item.get("source", "alpaca"),
+                created_at=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),
+                sentiment_hint=item.get("headline", ""),
+            )
+            for item in items
+        ]
+
+    def get_news_between(
+        self,
+        symbol: str,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int = 200,
+    ) -> list[NewsItem]:
+        params = {
+            "symbols": symbol,
+            "start": start.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "end": end.astimezone(UTC).isoformat().replace("+00:00", "Z"),
+            "limit": max(1, min(limit, 500)),
+            "sort": "asc",
+        }
         payload = self._request_json(self.settings.alpaca_data_base_url, "/v1beta1/news", params=params)
         items = payload.get("news", payload)
         if not isinstance(items, list):

@@ -10,7 +10,11 @@ Status note as of 2026-04-08:
 
 - Phase 0 broker-scope alignment and capability-gating items are implemented in the current repo.
 - Phase 1 foundation items are also implemented in the current repo.
-- The remaining sections below continue to describe the next upgrade path from the current baseline.
+- Phase 2 broker-execution items are now implemented in the current repo.
+- Phase 3 research-quality items are now implemented in the current repo.
+- Phase 4 data-depth items are now implemented in the current repo.
+- Phase 5 agent-intelligence items are now implemented in the current repo.
+- The remaining sections below describe the next upgrade path starting from Phase 6.
 
 ## Critical Scope Decision
 
@@ -230,6 +234,8 @@ Implemented:
 
 ## Phase 2: Build Real Broker Execution
 
+Current repo status: completed.
+
 ### Expand `BrokerAdapter` into a full execution interface
 
 Current issue:
@@ -246,6 +252,12 @@ Suggested files:
 
 - expand [adapters.py](../backend/src/tradingbot/services/adapters.py)
 - expand [execution.py](../backend/src/tradingbot/services/execution.py)
+
+Implemented:
+
+- execution adapters now expose account snapshots, open orders, positions, place/replace/cancel/cancel-all, get-order, fetch-fills, and close-all-positions
+- market-data/news adapters are separated from execution adapters
+- broker errors are normalized into category-aware `BrokerAPIError` responses
 
 ### Add a real order state machine
 
@@ -264,6 +276,12 @@ Suggested files:
 - [models.py](../backend/src/tradingbot/models.py)
 - [execution.py](../backend/src/tradingbot/services/execution.py)
 - dashboard routes under `web/app/`
+
+Implemented:
+
+- order states now include new, accepted, pending-trigger, partially-filled, filled, canceled, expired, replaced, rejected, and suspended
+- every order transition is persisted in `order_state_transitions`
+- the API and dashboard expose transition/fill lifecycle views per order
 
 ### Add broker reconciliation and event ingestion
 
@@ -285,6 +303,13 @@ Suggested files:
 - expand [adapters.py](../backend/src/tradingbot/services/adapters.py)
 - expand [execution.py](../backend/src/tradingbot/services/execution.py)
 
+Implemented:
+
+- reconciliation now compares broker open orders with local orders, applies broker snapshots, and records mismatches
+- fill ingestion and position sync run as part of reconciliation passes
+- unresolved mismatches in live mode automatically pause execution by arming the kill switch
+- reconciliation is available both from worker scheduling and an operator API endpoint
+
 ### Add pre-trade broker and exchange validation
 
 What to add or modify:
@@ -298,6 +323,11 @@ Suggested files:
 - expand [risk.py](../backend/src/tradingbot/services/risk.py)
 - expand [execution.py](../backend/src/tradingbot/services/execution.py)
 
+Implemented:
+
+- pre-trade validation now checks tick size, lot size, contract multiplier, expiry, option-chain availability, shortability, buying power, margin usage, open-order caps, and price bands
+- structurally invalid orders are blocked before broker submission and persisted as risk events
+
 ### Add support for real order types and exit handling
 
 What to add or modify:
@@ -306,6 +336,13 @@ What to add or modify:
 - add replace and amend flows
 - repair broken child orders
 - flatten positions when kill switch or end-of-session rules require it
+
+Implemented:
+
+- the broker adapter now maps market/limit/stop/stop-limit/bracket/OCO/trailing-stop and day/gtc/ioc/fok where supported by the broker
+- order replace and cancel-all flows are implemented in the service layer and exposed via operator endpoints
+- bracket child-order repair is executed after scans
+- flatten-all is available for manual actions and session-close enforcement
 
 ### Add derivatives and contract-master support
 
@@ -325,6 +362,12 @@ Suggested files:
 - new `backend/src/tradingbot/services/contracts.py`
 - expand [models.py](../backend/src/tradingbot/models.py)
 
+Implemented:
+
+- instrument contracts are persisted in `instrument_contracts` with expiry/strike/right/multiplier/lot/tick/exchange metadata
+- option-chain contract selection and futures rollover helpers are implemented in the contract-master service
+- pre-trade checks are now contract-aware, with cash-equity auto-registration for symbols without explicit entries
+
 ### Add multi-broker routing when needed
 
 What to add or modify:
@@ -333,7 +376,15 @@ What to add or modify:
 - isolate one broker outage from the rest of the system
 - keep broker-specific translations out of agent prompts and core risk logic
 
+Implemented:
+
+- execution now routes through `ExecutionBrokerRouter` using instrument-class and permission requirements
+- broker routing and broker-specific payload mapping are isolated in adapter code, not agent prompts or core risk logic
+- routing failures are surfaced as normalized broker errors so one broker path can fail without corrupting core execution state
+
 ## Phase 3: Build Real Research Quality
+
+Current repo status: completed.
 
 ### Upgrade backtesting from placeholder to research engine
 
@@ -356,6 +407,15 @@ Suggested files:
 - add backtest result models to [models.py](../backend/src/tradingbot/models.py)
 - add backtest API endpoints and dashboard views
 
+Implemented:
+
+- backtests now run as a deterministic research engine using historical bars and historical news over the requested period
+- fill simulation now includes slippage, commissions, delayed fills, and probabilistic broker-side rejections
+- reports now compute and persist equity curve, drawdown, Sharpe, win rate, expectancy, turnover, and exposure metrics
+- reports, walk-forward windows, regime breakdowns, equity-curve payloads, and per-trade simulation rows are persisted in dedicated backtest tables
+- operator APIs now expose queued/succeeded/failed backtest reports plus full report detail views
+- dashboard now includes a dedicated Backtests route for launching runs and reviewing saved report metrics
+
 ### Add walk-forward testing and regime evaluation
 
 What to add or modify:
@@ -367,6 +427,11 @@ What to add or modify:
 Why:
 
 - expert systems must survive outside one lucky sample
+
+Implemented:
+
+- each run now includes train/validation/test walk-forward windows with per-window metric summaries
+- each run now scores regime behavior across trend/chop/gap-driven/event-heavy classifications
 
 ### Add replay datasets and deterministic fixtures
 
@@ -381,7 +446,14 @@ Suggested files:
 - `backend/tests/fixtures/`
 - more test coverage under `backend/tests/`
 
+Implemented:
+
+- deterministic replay fixtures were added under `backend/tests/fixtures/` for bars, news, expected backtest snapshots, and broker fill events
+- fixture-backed tests now assert deterministic backtest outputs and stable fill-ingestion behavior from replayed broker data
+
 ## Phase 4: Expand Data Depth
+
+Current repo status: completed.
 
 ### Add richer market features
 
@@ -404,6 +476,11 @@ Suggested files:
 - expand [indicators.py](../backend/src/tradingbot/services/indicators.py)
 - add feature engineering service modules
 
+Implemented:
+
+- indicator computation now includes intraday volatility, gap statistics, relative volume, ATR/stop-distance context, opening-range structure, and multi-timeframe trend alignment
+- a dedicated feature service now merges per-symbol features with SPY/QQQ market-index context and a regime score
+
 ### Add structured event data
 
 What to add or modify:
@@ -417,6 +494,12 @@ What to add or modify:
 Why:
 
 - many bad trades are bad because the context is incomplete
+
+Implemented:
+
+- structured event extraction now tags earnings-date headlines, analyst actions, and macro-release mentions from symbol news
+- symbol-level sector ETF context is now appended as structured event data
+- recurring scheduled macro templates are now included as economic-calendar events in the decision context payload
 
 ### Add data validation and freshness checks
 
@@ -432,7 +515,15 @@ Suggested files:
 - [adapters.py](../backend/src/tradingbot/services/adapters.py)
 - new validation module in `backend/src/tradingbot/services/`
 
+Implemented:
+
+- scan-time data-quality validation now rejects stale bars, delayed news snapshots, missing-candle windows, and abnormal feed gaps before agent inference
+- rejected symbols are persisted as explicit data-quality trade rejections and risk events
+- every decision payload now includes data timestamps, quality diagnostics, structured events, and engineered feature snapshots
+
 ## Phase 5: Improve Agent Intelligence
+
+Current repo status: completed.
 
 ### Move from two-agent prompts to a structured committee
 
@@ -456,6 +547,12 @@ Suggested files:
 - expand [committee.py](../backend/src/tradingbot/services/committee.py)
 - add agent prompt/version registry
 
+Implemented:
+
+- the worker now runs a structured specialist committee with technical-structure, catalyst, market-regime, portfolio-exposure, and execution-quality roles
+- a chair summary now synthesizes specialist views into the final pre-risk thesis without bypassing deterministic risk rules
+- committee payloads now persist specialist signals, chair vote, committee notes, model name, and prompt-version lineage
+
 ### Add prompt and model versioning
 
 What to add or modify:
@@ -467,6 +564,12 @@ What to add or modify:
 Why:
 
 - expert systems need explainable changes and measurable iteration
+
+Implemented:
+
+- prompt templates now live in a dedicated prompt registry with explicit per-role versions
+- each agent run now stores the model name, prompt-version map, and shared input snapshot used for the committee
+- post-trade reviews can now be grouped by model/prompt signature for performance comparison
 
 ### Add strict output validation and repair flow
 
@@ -482,6 +585,12 @@ Suggested files:
 - [schemas/trading.py](../backend/src/tradingbot/schemas/trading.py)
 - [agents.py](../backend/src/tradingbot/services/agents.py)
 
+Implemented:
+
+- specialist and chair payloads are now schema-validated before use
+- malformed agent outputs trigger an automatic repair call with the target schema embedded in the repair payload
+- if a role still returns malformed output after repair, the trade is rejected and persisted as an explicit `agent_output_malformed` event rather than crashing the scan
+
 ### Add post-trade review and feedback loops
 
 What to add or modify:
@@ -493,6 +602,12 @@ What to add or modify:
   - bad execution
   - avoidable risk
 - build a review queue for recurring failure patterns
+
+Implemented:
+
+- filled exit orders now generate persisted post-trade reviews tied back to the originating run when lineage is available
+- losing trades are classified into `bad_signal`, `bad_context`, `bad_execution`, or `avoidable_risk` buckets
+- queued review rows and recurring-pattern warnings now provide a lightweight feedback loop for repeated failure modes
 
 ## Phase 6: Upgrade Risk Into A Real Portfolio Engine
 
@@ -683,11 +798,11 @@ Minimum bar:
 
 If the goal is maximum improvement for the next development cycle, do these first:
 
-1. Decide Alpaca-only versus multi-broker and encode that choice in a broker capability registry.
-2. Refactor the execution path into a dedicated execution worker with a real order state model.
-3. Implement broker reconciliation plus polling or streaming order updates.
-4. Add market calendar enforcement and pre-trade validation for tick size, lot size, and product support.
-5. Upgrade backtesting and risk so execution behavior is simulated with realistic fills, rejects, and drawdown rules.
+1. Upgrade risk from single-trade checks to portfolio-aware controls (gross/correlation/sector/event concentration limits).
+2. Add execution-quality analytics and TCA feedback loops so symbol selection and sizing react to observed fill quality.
+3. Expand observability with structured logs, alerting, and operator-facing performance/risk analytics.
+4. Harden CI/release discipline with replay regression gates and strategy-change release notes.
+5. Deepen the operator surface so review queues, committee disagreement, and prompt-version performance are visible in the dashboard.
 
 ## Definition Of "Expert" For This Repo
 

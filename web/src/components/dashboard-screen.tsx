@@ -12,9 +12,12 @@ import {
   disableLiveExecution,
   enableLiveExecution,
   flattenAllPositions,
+  getBacktestReport,
   getCurrentSession,
   getSettings,
+  launchBacktest,
   listAuditLogs,
+  listBacktests,
   listDecisions,
   listExecutionIntents,
   listOrderFills,
@@ -39,6 +42,9 @@ import {
 } from "@/lib/api";
 import type {
   AuditLogResponse,
+  BacktestDetailResponse,
+  BacktestRequestPayload,
+  BacktestSummaryResponse,
   BotSettingsResponse,
   BotSettingsUpdatePayload,
   BrokerSettings,
@@ -69,18 +75,61 @@ import {
   tradingPatternOptions
 } from "@/lib/trading-profile";
 
-type SectionName = "overview" | "orders" | "decisions" | "risk" | "settings";
+type SectionName = "overview" | "orders" | "decisions" | "risk" | "backtests" | "settings";
 
 const sections: Array<{ href: string; label: string; key: SectionName }> = [
   { href: "/", label: "Overview", key: "overview" },
   { href: "/orders", label: "Orders", key: "orders" },
   { href: "/decisions", label: "Decisions", key: "decisions" },
   { href: "/risk", label: "Risk", key: "risk" },
+  { href: "/backtests", label: "Backtests", key: "backtests" },
   { href: "/settings", label: "Settings", key: "settings" }
 ];
 
 interface Props {
   section: SectionName;
+}
+
+interface BacktestDraft {
+  symbols: string;
+  start: string;
+  end: string;
+  interval_minutes: number;
+  initial_equity: number;
+  slippage_bps: number;
+  commission_per_share: number;
+  fill_delay_bars: number;
+  reject_probability: number;
+  max_holding_bars: number;
+  random_seed: number;
+}
+
+function toLocalDateTimeInput(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hours = String(value.getHours()).padStart(2, "0");
+  const minutes = String(value.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function buildBacktestPayload(draft: BacktestDraft): BacktestRequestPayload {
+  return {
+    symbols: draft.symbols
+      .split(",")
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean),
+    start: new Date(draft.start).toISOString(),
+    end: new Date(draft.end).toISOString(),
+    interval_minutes: draft.interval_minutes,
+    initial_equity: draft.initial_equity,
+    slippage_bps: draft.slippage_bps,
+    commission_per_share: draft.commission_per_share,
+    fill_delay_bars: draft.fill_delay_bars,
+    reject_probability: draft.reject_probability,
+    max_holding_bars: draft.max_holding_bars,
+    random_seed: draft.random_seed
+  };
 }
 
 function buildSettingsPayload(draft: BotSettingsResponse): BotSettingsUpdatePayload {
@@ -153,6 +202,26 @@ export function DashboardScreen({ section }: Props) {
   const [mismatches, setMismatches] = useState<ReconciliationMismatchResponse[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogResponse[]>([]);
   const [sessions, setSessions] = useState<SessionResponse[]>([]);
+  const [backtests, setBacktests] = useState<BacktestSummaryResponse[]>([]);
+  const [selectedBacktestId, setSelectedBacktestId] = useState<string | null>(null);
+  const [selectedBacktest, setSelectedBacktest] = useState<BacktestDetailResponse | null>(null);
+  const [backtestDraft, setBacktestDraft] = useState<BacktestDraft>(() => {
+    const end = new Date();
+    const start = new Date(end.getTime() - 5 * 24 * 60 * 60 * 1000);
+    return {
+      symbols: "AAPL, MSFT, NVDA",
+      start: toLocalDateTimeInput(start),
+      end: toLocalDateTimeInput(end),
+      interval_minutes: 5,
+      initial_equity: 100000,
+      slippage_bps: 5,
+      commission_per_share: 0.005,
+      fill_delay_bars: 1,
+      reject_probability: 0.03,
+      max_holding_bars: 24,
+      random_seed: 42
+    };
+  });
   const [liveApproval, setLiveApproval] = useState<LiveEnablePrepareResponse | null>(null);
   const [liveApprovalCode, setLiveApprovalCode] = useState("");
   const deferredFilter = useDeferredValue(filterInput.trim().toLowerCase());
@@ -175,6 +244,9 @@ export function DashboardScreen({ section }: Props) {
     setMismatches([]);
     setAuditLogs([]);
     setSessions([]);
+    setBacktests([]);
+    setSelectedBacktestId(null);
+    setSelectedBacktest(null);
     setLiveApproval(null);
     setLiveApprovalCode("");
   }
@@ -230,6 +302,15 @@ export function DashboardScreen({ section }: Props) {
     setOrderFills(fills);
   }
 
+  async function loadBacktestDetail(reportId: string | null) {
+    if (!reportId) {
+      setSelectedBacktest(null);
+      return;
+    }
+    const detail = await getBacktestReport(reportId);
+    setSelectedBacktest(detail);
+  }
+
   async function loadDashboardData(resetDraft = false) {
     const [
       settingsResponse,
@@ -241,7 +322,8 @@ export function DashboardScreen({ section }: Props) {
       riskResponse,
       mismatchesResponse,
       auditResponse,
-      sessionResponse
+      sessionResponse,
+      backtestsResponse
     ] = await Promise.all([
       getSettings(),
       listRuns(),
@@ -252,7 +334,8 @@ export function DashboardScreen({ section }: Props) {
       listRiskEvents(),
       listReconciliationMismatches(),
       listAuditLogs(24),
-      listSessions()
+      listSessions(),
+      listBacktests(undefined, 24)
     ]);
 
     setSettingsData(settingsResponse);
@@ -266,12 +349,19 @@ export function DashboardScreen({ section }: Props) {
     setMismatches(mismatchesResponse);
     setAuditLogs(auditResponse);
     setSessions(sessionResponse);
+    setBacktests(backtestsResponse);
 
     const nextSelectedOrderId = ordersResponse.some((order) => order.id === selectedOrderId)
       ? selectedOrderId
       : ordersResponse[0]?.id ?? null;
     setSelectedOrderId(nextSelectedOrderId);
     await loadOrderLifecycle(nextSelectedOrderId);
+
+    const nextBacktestId = backtestsResponse.some((report) => report.id === selectedBacktestId)
+      ? selectedBacktestId
+      : backtestsResponse[0]?.id ?? null;
+    setSelectedBacktestId(nextBacktestId);
+    await loadBacktestDetail(nextBacktestId);
   }
 
   useEffect(() => {
@@ -304,7 +394,7 @@ export function DashboardScreen({ section }: Props) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [operator, selectedOrderId]);
+  }, [operator, selectedOrderId, selectedBacktestId]);
 
   const filteredOrders = useMemo(() => {
     if (!deferredFilter) {
@@ -340,6 +430,11 @@ export function DashboardScreen({ section }: Props) {
   function selectOrder(orderId: number) {
     setSelectedOrderId(orderId);
     void loadOrderLifecycle(orderId);
+  }
+
+  function selectBacktest(reportId: string) {
+    setSelectedBacktestId(reportId);
+    void loadBacktestDetail(reportId);
   }
 
   async function refreshNow(resetDraft = false) {
@@ -489,6 +584,29 @@ export function DashboardScreen({ section }: Props) {
       return "tag-negative";
     }
     return "tag-neutral";
+  }
+
+  async function handleLaunchBacktest() {
+    setBusy(true);
+    setFlash(null);
+    try {
+      const payload = buildBacktestPayload(backtestDraft);
+      if (payload.symbols.length === 0) {
+        setFlash({ tone: "error", text: "Enter at least one symbol for backtesting." });
+        return;
+      }
+      if (new Date(payload.end).getTime() <= new Date(payload.start).getTime()) {
+        setFlash({ tone: "error", text: "Backtest end must be after start." });
+        return;
+      }
+      const response = await launchBacktest(payload);
+      setFlash({ tone: "info", text: `Backtest queued. Report ${response.report_id}.` });
+      await refreshNow();
+    } catch (error) {
+      await handleApiError(error);
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (!authChecked) {
@@ -1270,6 +1388,287 @@ export function DashboardScreen({ section }: Props) {
                   ))}
                 </tbody>
               </table>
+            </section>
+          </div>
+        ) : null}
+
+        {!intakeRequired && section === "backtests" ? (
+          <div className="dashboard-grid">
+            <section className="panel settings-panel">
+              <div className="panel-heading">
+                <h3>Launch research backtest</h3>
+                <p>Simulates slippage, commissions, delayed fills, rejects, walk-forward windows, and regime scoring.</p>
+              </div>
+              <div className="settings-grid">
+                <label>
+                  Symbols
+                  <input
+                    type="text"
+                    value={backtestDraft.symbols}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, symbols: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Interval (minutes)
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    value={backtestDraft.interval_minutes}
+                    onChange={(event) =>
+                      setBacktestDraft({ ...backtestDraft, interval_minutes: Number(event.target.value) })
+                    }
+                  />
+                </label>
+                <label>
+                  Start
+                  <input
+                    type="datetime-local"
+                    value={backtestDraft.start}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, start: event.target.value })}
+                  />
+                </label>
+                <label>
+                  End
+                  <input
+                    type="datetime-local"
+                    value={backtestDraft.end}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, end: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Initial equity
+                  <input
+                    type="number"
+                    min={1000}
+                    value={backtestDraft.initial_equity}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, initial_equity: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  Slippage (bps)
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    value={backtestDraft.slippage_bps}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, slippage_bps: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  Commission/share
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.0001"
+                    value={backtestDraft.commission_per_share}
+                    onChange={(event) =>
+                      setBacktestDraft({ ...backtestDraft, commission_per_share: Number(event.target.value) })
+                    }
+                  />
+                </label>
+                <label>
+                  Fill delay (bars)
+                  <input
+                    type="number"
+                    min={0}
+                    max={20}
+                    value={backtestDraft.fill_delay_bars}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, fill_delay_bars: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  Reject probability
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step="0.01"
+                    value={backtestDraft.reject_probability}
+                    onChange={(event) =>
+                      setBacktestDraft({ ...backtestDraft, reject_probability: Number(event.target.value) })
+                    }
+                  />
+                </label>
+                <label>
+                  Max holding bars
+                  <input
+                    type="number"
+                    min={1}
+                    max={500}
+                    value={backtestDraft.max_holding_bars}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, max_holding_bars: Number(event.target.value) })}
+                  />
+                </label>
+                <label>
+                  Random seed
+                  <input
+                    type="number"
+                    min={1}
+                    value={backtestDraft.random_seed}
+                    onChange={(event) => setBacktestDraft({ ...backtestDraft, random_seed: Number(event.target.value) })}
+                  />
+                </label>
+              </div>
+              <button className="primary-button" disabled={busy || !canOperate} onClick={() => void handleLaunchBacktest()}>
+                Run backtest
+              </button>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Backtest history</h3>
+                <p>Persisted reports from the research engine.</p>
+              </div>
+              <table className="data-table selectable">
+                <thead>
+                  <tr>
+                    <th>Status</th>
+                    <th>Symbols</th>
+                    <th>Return</th>
+                    <th>Sharpe</th>
+                    <th>Time</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backtests.map((report) => (
+                    <tr
+                      key={report.id}
+                      className={selectedBacktestId === report.id ? "table-row-active" : undefined}
+                      onClick={() => selectBacktest(report.id)}
+                    >
+                      <td>
+                        <span className={statusTone(report.status)}>{report.status}</span>
+                      </td>
+                      <td>{report.symbols.join(", ")}</td>
+                      <td>{report.total_return_pct.toFixed(2)}%</td>
+                      <td>{report.sharpe_ratio.toFixed(2)}</td>
+                      <td>{timestamp(report.created_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {backtests.length === 0 ? <p className="muted">No backtest reports yet.</p> : null}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Selected report</h3>
+                <p>{selectedBacktest ? `Report ${selectedBacktest.id}` : "Select a report to inspect details."}</p>
+              </div>
+              {selectedBacktest ? (
+                <>
+                  <div className="profile-summary-grid">
+                    <div className="summary-pill">
+                      <span>Total trades</span>
+                      <strong>{selectedBacktest.total_trades}</strong>
+                    </div>
+                    <div className="summary-pill">
+                      <span>Rejected</span>
+                      <strong>{selectedBacktest.rejected_orders}</strong>
+                    </div>
+                    <div className="summary-pill">
+                      <span>Return</span>
+                      <strong>{selectedBacktest.total_return_pct.toFixed(2)}%</strong>
+                    </div>
+                    <div className="summary-pill">
+                      <span>Drawdown</span>
+                      <strong>{selectedBacktest.max_drawdown_pct.toFixed(2)}%</strong>
+                    </div>
+                    <div className="summary-pill">
+                      <span>Sharpe</span>
+                      <strong>{selectedBacktest.sharpe_ratio.toFixed(2)}</strong>
+                    </div>
+                    <div className="summary-pill">
+                      <span>Final equity</span>
+                      <strong>{currency(selectedBacktest.final_equity)}</strong>
+                    </div>
+                  </div>
+                  <div className="stack-list" style={{ marginTop: 12 }}>
+                    <div className="stack-row">
+                      <span>Expectancy</span>
+                      <span>{currency(selectedBacktest.expectancy)}</span>
+                    </div>
+                    <div className="stack-row">
+                      <span>Turnover</span>
+                      <span>{selectedBacktest.turnover.toFixed(2)}x</span>
+                    </div>
+                    <div className="stack-row">
+                      <span>Exposure (avg/max)</span>
+                      <span>
+                        {selectedBacktest.avg_exposure_pct.toFixed(2)}% / {selectedBacktest.max_exposure_pct.toFixed(2)}%
+                      </span>
+                    </div>
+                    <div className="stack-row">
+                      <span>Walk-forward windows</span>
+                      <span>{selectedBacktest.walk_forward.length}</span>
+                    </div>
+                    <div className="stack-row">
+                      <span>Regimes</span>
+                      <span>{selectedBacktest.regime_breakdown.length}</span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="muted">No report selected.</p>
+              )}
+            </section>
+
+            <section className="panel settings-panel">
+              <div className="panel-heading">
+                <h3>Walk-forward and regime stats</h3>
+                <p>Train/validation/test splits and trend/chop/gap/event behavior.</p>
+              </div>
+              {selectedBacktest ? (
+                <>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Window</th>
+                        <th>Trades</th>
+                        <th>Return</th>
+                        <th>Sharpe</th>
+                        <th>Drawdown</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedBacktest.walk_forward.map((window, index) => (
+                        <tr key={`${String(window.window)}-${index}`}>
+                          <td>{String(window.window ?? index)}</td>
+                          <td>{Number(window.trades ?? 0)}</td>
+                          <td>{Number(window.total_return_pct ?? 0).toFixed(2)}%</td>
+                          <td>{Number(window.sharpe_ratio ?? 0).toFixed(2)}</td>
+                          <td>{Number(window.max_drawdown_pct ?? 0).toFixed(2)}%</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <table className="data-table" style={{ marginTop: 14 }}>
+                    <thead>
+                      <tr>
+                        <th>Regime</th>
+                        <th>Trades</th>
+                        <th>Rejected</th>
+                        <th>Win rate</th>
+                        <th>Expectancy</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {selectedBacktest.regime_breakdown.map((regime, index) => (
+                        <tr key={`${String(regime.regime)}-${index}`}>
+                          <td>{String(regime.regime ?? index)}</td>
+                          <td>{Number(regime.trades ?? 0)}</td>
+                          <td>{Number(regime.rejected_orders ?? 0)}</td>
+                          <td>{Number(regime.win_rate ?? 0).toFixed(2)}%</td>
+                          <td>{currency(Number(regime.expectancy ?? 0))}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              ) : (
+                <p className="muted">No backtest detail loaded.</p>
+              )}
             </section>
           </div>
         ) : null}

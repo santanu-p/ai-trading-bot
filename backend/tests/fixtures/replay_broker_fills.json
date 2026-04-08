@@ -1,0 +1,22 @@
+[
+  {
+    "broker_fill_id": "fixture-fill-1",
+    "broker_order_id": "fixture-order-1",
+    "symbol": "AAPL",
+    "side": "buy",
+    "quantity": 4,
+    "price": 155.42,
+    "fee": 0.12,
+    "filled_at": "2026-01-05T16:41:00Z"
+  },
+  {
+    "broker_fill_id": "fixture-fill-2",
+    "broker_order_id": "fixture-order-1",
+    "symbol": "AAPL",
+    "side": "buy",
+    "quantity": 6,
+    "price": 155.57,
+    "fee": 0.18,
+    "filled_at": "2026-01-05T16:46:00Z"
+  }
+]
