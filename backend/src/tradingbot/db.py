@@ -12,15 +12,28 @@ class Base(DeclarativeBase):
     pass
 
 
-settings = get_settings()
-engine = create_engine(settings.database_url, future=True, pool_pre_ping=True)
-SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+_engine = None
+_session_factory = None
+
+
+def get_engine():
+    global _engine
+    if _engine is None:
+        settings = get_settings()
+        _engine = create_engine(settings.database_url, future=True, pool_pre_ping=True)
+    return _engine
+
+
+def get_session_factory() -> sessionmaker[Session]:
+    global _session_factory
+    if _session_factory is None:
+        _session_factory = sessionmaker(bind=get_engine(), autoflush=False, autocommit=False, future=True)
+    return _session_factory
 
 
 def get_db_session() -> Generator[Session, None, None]:
-    session = SessionLocal()
+    session = get_session_factory()()
     try:
         yield session
     finally:
         session.close()
-

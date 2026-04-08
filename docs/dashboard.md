@@ -34,18 +34,27 @@ These answers are persisted in backend settings and injected into the market/new
 
 ### Login
 
-The operator authenticates against the backend and stores the JWT in `localStorage`.
+The operator authenticates against the backend with a secure HTTP-only cookie session.
+
+Roles:
+
+- `reviewer`: read-only visibility
+- `operator`: bot controls and intent approvals
+- `admin`: settings changes, live enablement, and forced logout
 
 ### Polling
 
 The dashboard polls the backend every 30 seconds for:
 
 - settings
+- execution intents
 - runs
 - decisions
 - orders
 - positions
 - risk events
+- audit logs
+- operator sessions
 
 ### Actions
 
@@ -55,19 +64,37 @@ The sidebar exposes:
 - Stop bot
 - Flip mode
 - Toggle kill switch
+- Reconcile now
+- Cancel all open orders
+- Flatten all
+- Sign out
 
 The `Start bot` action is disabled until the intake is complete.
+
+The settings route adds:
+
+- live enablement code generation
+- live enable/disable controls
+- broker kill
+- session review and admin revocation
+- full bot settings editing for admins
 
 ### Data Views
 
 Overview displays:
 
+- market session state
+- live-safety state
+- execution-intent review queue
+- broker capability coverage
 - current positions
 - committee feed
-- execution log
+- audit log
 - run history
 
-Settings displays editable fields for all configurable guardrails and the watchlist.
+Risk displays risk events, reconciliation mismatches, and audit history.
+
+Settings displays editable fields for all configurable guardrails and the watchlist plus live safety controls and session management.
 
 ## Frontend Notes
 
@@ -78,7 +105,6 @@ Settings displays editable fields for all configurable guardrails and the watchl
 
 ## Current Limitations
 
-- JWT is stored in `localStorage`, which is acceptable for this scaffold but not ideal for hardened production auth.
 - No websocket streaming.
 - No optimistic state reconciliation.
-- No route protection on the server side beyond the client-side login gate.
+- Frontend type-check/build validation was not run in this task because local Node dependencies were intentionally not installed.

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel, Field
 
 from tradingbot.enums import (
@@ -39,10 +41,26 @@ class BrokerCapability(BaseModel):
     supported: bool
 
 
+class MarketSessionResponse(BaseModel):
+    venue: str
+    timezone: str
+    status: str
+    reason: str | None = None
+    is_half_day: bool = False
+    can_scan: bool
+    can_submit_orders: bool
+    should_flatten_positions: bool
+    session_opens_at: datetime | None = None
+    session_closes_at: datetime | None = None
+    next_session_opens_at: datetime | None = None
+
+
 class BotSettingsResponse(BaseModel):
     status: BotStatus
     mode: TradingMode
     kill_switch_enabled: bool
+    live_enabled: bool
+    live_trading_env_allowed: bool
     scan_interval_minutes: int
     consensus_threshold: float
     max_open_positions: int
@@ -60,6 +78,7 @@ class BotSettingsResponse(BaseModel):
     execution_support_status: str
     live_start_allowed: bool
     analysis_only_downgrade_reason: str | None
+    market_session: MarketSessionResponse
 
 
 class BotSettingsUpdate(BaseModel):
@@ -84,3 +103,4 @@ class BotStatusResponse(BaseModel):
     status: BotStatus
     mode: TradingMode
     kill_switch_enabled: bool
+    live_enabled: bool

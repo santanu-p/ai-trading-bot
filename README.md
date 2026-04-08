@@ -11,18 +11,27 @@ No dependencies were installed and no services were started while creating this 
 
 ## What This Repo Implements
 
-- Alpaca-based paper/live-ready equities trading workflow
+- Alpaca-based paper/live equities trading workflow with explicit live enablement
 - 5-minute scan worker design for intraday decision cycles
 - first-step agent intake for selecting trading pattern, instrument class, strategy family, risk profile, and market universe
+- Alembic-based schema migrations under `backend/alembic/`
+- exchange-session and trading-calendar gating with half-day and end-of-session flatten rules
+- queued execution intents with a dedicated execution worker boundary
+- secure HTTP-only operator sessions with role-based access for `reviewer`, `operator`, and `admin`
 - Multi-agent committee shape:
   - market agent
   - news agent
   - deterministic risk engine
+  - execution intent handoff
   - execution service
 - Operator dashboard for:
   - bot start/stop
   - mode switching
   - kill switch
+  - live enable/disable workflow
+  - execution-intent review
+  - session visibility and forced logout
+  - audit-log visibility
   - settings and watchlist updates
   - decision/order/risk visibility
 - Shared decision contract in [committee-decision.schema.json](contracts/committee-decision.schema.json)
@@ -30,10 +39,9 @@ No dependencies were installed and no services were started while creating this 
 ## What This Repo Does Not Yet Do
 
 - Install or pin local Python/Node environments on your machine
-- Run migrations through Alembic
 - Start API, worker, Postgres, Redis, or the web app
 - Prove live trading behavior end-to-end against Alpaca
-- Add production auth, secrets management, or cloud provisioning code
+- Add full production secret management, rate limiting, CSRF protection, or cloud provisioning code
 
 ## Repo Layout
 
@@ -62,14 +70,15 @@ No dependencies were installed and no services were started while creating this 
 ## Core Flow
 
 1. The operator authenticates in the dashboard.
-2. The backend stores bot settings and watchlist symbols in Postgres.
-3. The worker wakes up on schedule and checks bot state.
-4. For each enabled watchlist symbol, the worker fetches Alpaca bars and Alpaca news.
-5. The market and news agents produce structured decisions.
-6. The committee proposes a trade.
+2. The backend issues a secure cookie-backed session and enforces operator roles on every control-plane route.
+3. Alembic migrations manage schema changes before the API and worker start.
+4. The worker wakes up on schedule, checks bot state, and enforces market-session rules.
+5. For each enabled watchlist symbol, the worker fetches Alpaca bars and Alpaca news.
+6. The market and news agents produce structured decisions and the committee proposes a trade.
 7. The risk engine deterministically approves or rejects it.
-8. Approved decisions are sent to the broker adapter and persisted as orders/positions.
-9. The dashboard polls the backend for the latest state.
+8. Approved decisions are persisted as execution intents instead of being submitted inline.
+9. Operators review live intents when required, and the execution worker re-checks market hours, kill switch, broker connectivity, and live gates before broker submission.
+10. The dashboard polls the backend for settings, intents, runs, orders, sessions, audit logs, and risk state.
 
 ## Documentation
 
@@ -86,12 +95,12 @@ No dependencies were installed and no services were started while creating this 
 
 ## Verification Performed
 
-- Static Python parse completed for all files in `backend/src` and `backend/tests`
+- `pytest backend/tests -q` completed successfully in the current environment with `PYTHONPATH=backend/src`
 - No dependency installation was performed
 - No services were started
-- No browser build or test run was executed
+- Frontend type-check/build validation was not executed because local Node dependencies were intentionally not installed
 
 ## Notes
 
 - Some transient Python cache artifacts may exist from parse attempts that were blocked by the Windows sandbox; they are ignored by `.gitignore`.
-- The current repository is a structured scaffold, not a production-hardened trading system.
+- The current repository now includes the Phase 1 foundation work, but it is still not a production-hardened trading system.

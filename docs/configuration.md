@@ -13,14 +13,21 @@ The root `.env.example` documents the current configuration surface.
 
 ### Auth
 
-- `JWT_SECRET`
-- `JWT_ALGORITHM`
-- `JWT_EXPIRE_MINUTES`
+- `SESSION_SECRET`
+- `SESSION_EXPIRE_MINUTES`
+- `SESSION_COOKIE_NAME`
+- `SESSION_COOKIE_SECURE`
 - `ADMIN_EMAIL`
 - `ADMIN_PASSWORD`
 - `ADMIN_PASSWORD_HASH`
+- `OPERATOR_EMAIL`
+- `OPERATOR_PASSWORD`
+- `OPERATOR_PASSWORD_HASH`
+- `REVIEWER_EMAIL`
+- `REVIEWER_PASSWORD`
+- `REVIEWER_PASSWORD_HASH`
 
-Use either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`. The code will prefer the hash when present.
+Use either the plain password or the password hash for each configured role. The code will prefer the hash when present.
 
 ### OpenAI
 
@@ -46,6 +53,13 @@ Use either `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`. The code will prefer the h
 - `WEB_ORIGIN`
 - `API_BASE_URL`
 - `NEXT_PUBLIC_API_BASE_URL`
+
+### Live trading gates
+
+- `ALLOW_LIVE_TRADING`
+- `LIVE_TRADING_ALLOWED_BROKERS`
+- `LIVE_ENABLE_CODE_TTL_MINUTES`
+- `INTRADAY_FLATTEN_BUFFER_MINUTES`
 
 ## Runtime Defaults In Code
 

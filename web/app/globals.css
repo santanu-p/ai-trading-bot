@@ -112,6 +112,11 @@ textarea {
   line-height: 1.6;
 }
 
+.info-text {
+  color: var(--accent);
+  margin: 0;
+}
+
 .status-stack,
 .command-stack,
 .section-nav,
@@ -188,6 +193,13 @@ textarea {
   gap: 16px;
 }
 
+.inline-action-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
 .workspace-header,
 .risk-item {
   justify-content: space-between;
@@ -196,6 +208,21 @@ textarea {
 
 .header-actions {
   align-items: center;
+}
+
+.account-chip {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 252, 247, 0.7);
+  padding: 10px 14px;
+  display: grid;
+  gap: 4px;
+  min-width: 220px;
+}
+
+.account-chip span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .filter-input,
@@ -322,6 +349,20 @@ textarea {
   font-size: 14px;
 }
 
+.data-table.selectable tbody tr {
+  cursor: pointer;
+}
+
+.table-row-active {
+  background: rgba(17, 122, 109, 0.08);
+}
+
+.inline-button {
+  padding: 6px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
 .decision-item,
 .risk-item,
 .stack-row {
@@ -344,7 +385,8 @@ textarea {
 }
 
 .tag-positive,
-.tag-negative {
+.tag-negative,
+.tag-neutral {
   padding: 4px 10px;
   border-radius: 999px;
   font-size: 12px;
@@ -358,6 +400,11 @@ textarea {
 .tag-negative {
   background: rgba(162, 75, 52, 0.12);
   color: var(--warning);
+}
+
+.tag-neutral {
+  background: rgba(27, 36, 31, 0.08);
+  color: var(--muted);
 }
 
 .note-row {

@@ -6,6 +6,12 @@ Important: "expert-grade" here means stronger research quality, execution qualit
 
 For the production deployment, safety, and recovery path, see [production-hardening-plan.md](production-hardening-plan.md).
 
+Status note as of 2026-04-08:
+
+- Phase 0 broker-scope alignment and capability-gating items are implemented in the current repo.
+- Phase 1 foundation items are also implemented in the current repo.
+- The remaining sections below continue to describe the next upgrade path from the current baseline.
+
 ## Critical Scope Decision
 
 The repo now asks the operator to choose patterns such as intraday, delivery, futures, and options, but the current execution layer is still Alpaca-oriented and cash-equity only.
@@ -60,7 +66,7 @@ Recommended order:
 
 ### Make product support explicit in the UX and API
 
-Current issue:
+Original issue:
 
 - the intake can capture delivery, futures, and options intent, but execution support is still limited
 
@@ -105,6 +111,8 @@ Suggested files:
 
 ## Phase 1: Fix The Foundations
 
+Current repo status: completed.
+
 ### Replace startup table creation with real migrations
 
 Current issue:
@@ -121,9 +129,14 @@ Why:
 
 - expert systems need reproducible schema evolution and safe deploys
 
+Implemented:
+
+- Alembic config and initial migration now live under `backend/alembic/`
+- startup `create_all(...)` has been removed from the API boot path
+
 ### Add explicit market-hours and trading-calendar gating
 
-Current issue:
+Original issue:
 
 - the worker runs on a fixed interval but does not yet enforce exchange calendars, holiday handling, or product-session rules
 
@@ -140,9 +153,14 @@ Suggested files:
 - update [tasks.py](../backend/src/tradingbot/worker/tasks.py)
 - update [execution.py](../backend/src/tradingbot/services/execution.py)
 
+Implemented:
+
+- scans and submissions now use a market calendar service
+- half-days, venue timezone handling, and session-close flatten rules are enforced
+
 ### Separate paper and live safety modes more aggressively
 
-Current issue:
+Original issue:
 
 - the code supports paper/live mode switching, but expert-grade systems need stronger live-mode friction
 
@@ -161,9 +179,15 @@ Suggested files:
 - [trading.py](../backend/src/tradingbot/api/routers/trading.py)
 - dashboard settings UI in [dashboard-screen.tsx](../web/src/components/dashboard-screen.tsx)
 
+Implemented:
+
+- `live_enabled` is now separate from mode
+- live trading is gated by environment allowlists and short-lived admin approval codes
+- flatten-all and broker-kill controls are exposed in the API and dashboard
+
 ### Split decisioning from execution
 
-Current issue:
+Original issue:
 
 - [tasks.py](../backend/src/tradingbot/worker/tasks.py) both decides and submits orders in one path
 
@@ -180,9 +204,15 @@ Suggested files:
 - new `backend/src/tradingbot/worker/execution_tasks.py`
 - expand [execution.py](../backend/src/tradingbot/services/execution.py)
 
+Implemented:
+
+- approved decisions are persisted as execution intents
+- a dedicated execution worker performs the final submission boundary checks
+- execution remains idempotent through stored intent metadata
+
 ### Harden auth and operator controls
 
-Current issue:
+Original issue:
 
 - dashboard token is stored in `localStorage`
 - current auth model is single-admin and minimal
@@ -192,6 +222,11 @@ What to add or modify:
 - move to secure cookies or short-lived access + refresh flow
 - add role-based access for operator, reviewer, admin
 - add session expiry, audit trail filtering, and forced logout support
+
+Implemented:
+
+- the dashboard now uses secure cookies instead of `localStorage`
+- operator roles, session expiry, audit trails, and forced logout support are live
 
 ## Phase 2: Build Real Broker Execution
 

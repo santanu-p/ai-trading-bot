@@ -6,23 +6,27 @@ from celery.result import AsyncResult
 from sqlalchemy import select
 
 from tradingbot.config import get_settings
-from tradingbot.db import SessionLocal
+from tradingbot.db import get_session_factory
 from tradingbot.enums import BotStatus, RiskDecision, RunStatus, TradingMode
 from tradingbot.models import AgentRun, BotSettings, PortfolioSnapshot, PositionRecord, RiskEvent, TradeCandidate, WatchlistSymbol
 from tradingbot.schemas.trading import BacktestRequest, RiskCheckResult
 from tradingbot.services.adapters import build_broker_adapter, build_market_data_adapter, build_news_adapter
 from tradingbot.services.agents import AgentRunner
 from tradingbot.services.backtest import BacktestService
+from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.committee import CommitteeService
 from tradingbot.services.execution import ExecutionService
 from tradingbot.services.indicators import bar_summary
+from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.risk import RiskEngine, RiskPolicy
 from tradingbot.services.store import (
     ensure_bot_settings,
+    live_trading_env_allowed,
     resolve_execution_support,
     serialize_trading_profile,
     strategy_profile_completed,
 )
+from tradingbot.worker.execution_tasks import enqueue_execution_intent, enqueue_session_flatten
 from tradingbot.worker.celery_app import celery_app
 
 
@@ -45,11 +49,11 @@ def enqueue_backtest(payload: BacktestRequest) -> AsyncResult:
 @celery_app.task(name="tradingbot.worker.tasks.run_market_scan")
 def run_market_scan() -> dict[str, int]:
     settings = get_settings()
-    session = SessionLocal()
+    session = get_session_factory()()
     try:
         settings_row = ensure_bot_settings(session)
         if settings_row.status != BotStatus.RUNNING or settings_row.kill_switch_enabled:
-            return {"queued": 0}
+            return {"queued": 0, "repaired_children": 0, "unresolved_mismatches": 0}
         if not strategy_profile_completed(settings_row):
             session.add(
                 RiskEvent(
@@ -61,10 +65,12 @@ def run_market_scan() -> dict[str, int]:
                 )
             )
             session.commit()
-            return {"queued": 0}
+            return {"queued": 0, "repaired_children": 0, "unresolved_mismatches": 0}
 
         execution_support = resolve_execution_support(settings_row)
-        if settings_row.mode == TradingMode.LIVE and not execution_support.live_start_allowed:
+        if settings_row.mode == TradingMode.LIVE and (
+            not execution_support.live_start_allowed or not live_trading_env_allowed(settings_row)
+        ):
             session.add(
                 RiskEvent(
                     symbol=None,
@@ -76,7 +82,7 @@ def run_market_scan() -> dict[str, int]:
                 )
             )
             session.commit()
-            return {"queued": 0}
+            return {"queued": 0, "repaired_children": 0, "unresolved_mismatches": 0}
 
         broker = build_broker_adapter(settings_row)
         market_data = build_market_data_adapter(settings_row)
@@ -85,15 +91,61 @@ def run_market_scan() -> dict[str, int]:
         committee = CommitteeService(settings_row.consensus_threshold, settings.min_approval_votes)
         risk_engine = _build_risk_engine(settings_row)
         execution = ExecutionService(session, broker)
+        calendar = MarketCalendarService.for_settings(settings_row)
+        reconciliation = ReconciliationService(
+            session=session,
+            settings_row=settings_row,
+            execution=execution,
+            adapter=broker,
+        )
 
-        account = broker.get_account()
+        reconciliation_report = reconciliation.reconcile()
+        if settings_row.mode == TradingMode.LIVE and reconciliation_report.live_paused:
+            return {
+                "queued": 0,
+                "repaired_children": 0,
+                "unresolved_mismatches": reconciliation_report.unresolved_mismatches,
+            }
+
+        session_state = calendar.session_state(
+            trading_pattern=settings_row.trading_pattern,
+            instrument_class=settings_row.instrument_class,
+        )
+        if session_state.should_flatten_positions:
+            if session.query(PositionRecord).count() > 0:
+                enqueue_session_flatten("session_close_flatten")
+            return {
+                "queued": 0,
+                "repaired_children": 0,
+                "unresolved_mismatches": reconciliation_report.unresolved_mismatches,
+            }
+        if not session_state.can_scan:
+            session.add(
+                RiskEvent(
+                    symbol=None,
+                    severity="warning",
+                    code="market_closed",
+                    message=session_state.reason or "Market session is closed for scanning.",
+                    payload={"next_session_opens_at": session_state.next_session_opens_at.isoformat() if session_state.next_session_opens_at else None},
+                )
+            )
+            session.commit()
+            return {
+                "queued": 0,
+                "repaired_children": 0,
+                "unresolved_mismatches": reconciliation_report.unresolved_mismatches,
+            }
+
+        account = broker.get_account_snapshot()
+        broker_positions = broker.list_positions()
+        execution.sync_positions_snapshot(broker_positions, source="scan_snapshot")
         session.add(
             PortfolioSnapshot(
                 equity=account.equity,
                 cash=account.cash,
                 buying_power=account.buying_power,
                 daily_pl=account.daily_pl,
-                exposure=0,
+                exposure=sum(position.market_value for position in broker_positions),
             )
         )
         session.commit()
@@ -164,13 +216,16 @@ def run_market_scan() -> dict[str, int]:
                 session.commit()
 
                 if decision.status.value == "approved":
-                    execution.submit_trade(
-                        mode=settings_row.mode,
+                    intent = execution.queue_trade_intent(
+                        settings_row=settings_row,
+                        run_id=run.id,
                         decision=decision,
                         risk_result=risk_result,
                         execution_allowed=execution_support.supported_for_execution is not None,
                         block_reason=executor_block_reason,
                     )
+                    if intent.status.value == "approved":
+                        enqueue_execution_intent(intent.id)
                     open_positions += 1
                     queued += 1
                 else:
@@ -199,7 +254,39 @@ def run_market_scan() -> dict[str, int]:
                 )
                 session.commit()
 
-        return {"queued": queued}
+        repaired_children = execution.repair_broken_child_orders()
+        post_report = reconciliation.reconcile()
+
+        return {
+            "queued": queued,
+            "repaired_children": repaired_children,
+            "unresolved_mismatches": post_report.unresolved_mismatches,
+        }
+    finally:
+        session.close()
+
+
+@celery_app.task(name="tradingbot.worker.tasks.run_reconciliation")
+def run_reconciliation() -> dict[str, int]:
+    session = get_session_factory()()
+    try:
+        settings_row = ensure_bot_settings(session)
+        broker = build_broker_adapter(settings_row)
+        execution = ExecutionService(session, broker)
+        service = ReconciliationService(
+            session=session,
+            settings_row=settings_row,
+            execution=execution,
+            adapter=broker,
+        )
+        report = service.reconcile()
+        return {
+            "transitions_applied": report.transitions_applied,
+            "fills_ingested": report.fills_ingested,
+            "mismatches_created": report.mismatches_created,
+            "unresolved_mismatches": report.unresolved_mismatches,
+            "live_paused": int(report.live_paused),
+        }
     finally:
         session.close()
 
@@ -207,7 +294,7 @@ def run_market_scan() -> dict[str, int]:
 @celery_app.task(name="tradingbot.worker.tasks.run_backtest")
 def run_backtest(payload: dict) -> dict[str, int]:
     request = BacktestRequest.model_validate(payload)
-    session = SessionLocal()
+    session = get_session_factory()()
     try:
         settings_row = ensure_bot_settings(session)
         market_data = build_market_data_adapter(settings_row)

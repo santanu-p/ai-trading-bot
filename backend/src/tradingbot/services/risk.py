@@ -29,6 +29,7 @@ class RiskEngine:
         daily_loss_pct: float,
         active_symbol_exposure: float,
         is_symbol_in_cooldown: bool,
+        pretrade_notes: list[str] | None = None,
     ) -> RiskCheckResult:
         notes: list[str] = []
 
@@ -60,10 +61,10 @@ class RiskEngine:
             notes.append("Risk budget does not allow any shares.")
         if notional > buying_power:
             notes.append("Insufficient buying power.")
-        if notional > equity * self.policy.max_symbol_notional_pct:
-            notes.append("Trade exceeds single-symbol notional cap.")
-        if active_symbol_exposure + notional > equity * self.policy.max_symbol_notional_pct:
+        if active_symbol_exposure >= equity * self.policy.max_symbol_notional_pct:
             notes.append("Existing exposure to this symbol is already at the cap.")
+        if pretrade_notes:
+            notes.extend(pretrade_notes)
 
         if notes:
             return RiskCheckResult(decision=RiskDecision.REJECTED, notes=notes)
@@ -73,4 +74,3 @@ class RiskEngine:
             approved_quantity=approved_quantity,
             notes=["Risk checks passed."],
         )
-

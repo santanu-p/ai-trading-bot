@@ -6,16 +6,265 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tradingbot.enums import OrderIntent, TradingMode
-from tradingbot.models import OrderRecord, PositionRecord, RiskEvent
+from tradingbot.enums import ExecutionIntentStatus, ExecutionIntentType, InstrumentClass, OrderIntent, OrderStatus, OrderType, TradingMode
+from tradingbot.models import AuditLog, BotSettings, ExecutionIntent, OrderFill, OrderRecord, OrderStateTransition, PositionRecord, RiskEvent
 from tradingbot.schemas.trading import CommitteeDecision, RiskCheckResult
-from tradingbot.services.adapters import BrokerAdapter, OrderSubmission
+from tradingbot.services.adapters import (
+    BrokerFill,
+    BrokerAPIError,
+    BrokerOrder,
+    BrokerPosition,
+    ExecutionAdapter,
+    OrderRequest,
+    ReplaceOrderRequest,
+)
+from tradingbot.services.calendar import MarketCalendarService
+from tradingbot.services.contracts import ContractMasterService
+from tradingbot.services.pretrade import PreTradeValidator
+
+TERMINAL_STATUSES = {
+    OrderStatus.FILLED,
+    OrderStatus.CANCELED,
+    OrderStatus.EXPIRED,
+    OrderStatus.REPLACED,
+    OrderStatus.REJECTED,
+}
+
+STATE_TRANSITIONS: dict[OrderStatus | None, set[OrderStatus]] = {
+    None: {OrderStatus.NEW},
+    OrderStatus.NEW: {
+        OrderStatus.ACCEPTED,
+        OrderStatus.PENDING_TRIGGER,
+        OrderStatus.CANCELED,
+        OrderStatus.REJECTED,
+        OrderStatus.SUSPENDED,
+    },
+    OrderStatus.ACCEPTED: {
+        OrderStatus.PENDING_TRIGGER,
+        OrderStatus.PARTIALLY_FILLED,
+        OrderStatus.FILLED,
+        OrderStatus.CANCELED,
+        OrderStatus.REPLACED,
+        OrderStatus.REJECTED,
+        OrderStatus.SUSPENDED,
+    },
+    OrderStatus.PENDING_TRIGGER: {
+        OrderStatus.ACCEPTED,
+        OrderStatus.PARTIALLY_FILLED,
+        OrderStatus.FILLED,
+        OrderStatus.CANCELED,
+        OrderStatus.EXPIRED,
+        OrderStatus.REJECTED,
+        OrderStatus.SUSPENDED,
+    },
+    OrderStatus.PARTIALLY_FILLED: {
+        OrderStatus.PARTIALLY_FILLED,
+        OrderStatus.FILLED,
+        OrderStatus.CANCELED,
+        OrderStatus.REPLACED,
+        OrderStatus.REJECTED,
+        OrderStatus.SUSPENDED,
+    },
+    OrderStatus.REPLACED: {
+        OrderStatus.ACCEPTED,
+        OrderStatus.PENDING_TRIGGER,
+        OrderStatus.PARTIALLY_FILLED,
+        OrderStatus.FILLED,
+        OrderStatus.CANCELED,
+        OrderStatus.EXPIRED,
+        OrderStatus.REJECTED,
+        OrderStatus.SUSPENDED,
+    },
+    OrderStatus.SUSPENDED: {
+        OrderStatus.ACCEPTED,
+        OrderStatus.CANCELED,
+        OrderStatus.REJECTED,
+    },
+    OrderStatus.FILLED: set(),
+    OrderStatus.CANCELED: set(),
+    OrderStatus.EXPIRED: set(),
+    OrderStatus.REJECTED: set(),
+}
 
 
 class ExecutionService:
-    def __init__(self, session: Session, broker: BrokerAdapter) -> None:
+    def __init__(self, session: Session, broker: ExecutionAdapter) -> None:
         self.session = session
         self.broker = broker
+        self.contract_master = ContractMasterService(session)
+        self.pretrade = PreTradeValidator(session, self.contract_master)
+
+    def queue_trade_intent(
+        self,
+        *,
+        settings_row: BotSettings,
+        run_id: str,
+        decision: CommitteeDecision,
+        risk_result: RiskCheckResult,
+        execution_allowed: bool,
+        block_reason: str | None,
+    ) -> ExecutionIntent:
+        intent = self.session.scalar(select(ExecutionIntent).where(ExecutionIntent.source_run_id == run_id))
+        if intent is not None:
+            return intent
+
+        requires_human_approval = settings_row.mode == TradingMode.LIVE
+        status = ExecutionIntentStatus.PENDING_APPROVAL if requires_human_approval else ExecutionIntentStatus.APPROVED
+        intent_id = str(uuid4())
+        intent = ExecutionIntent(
+            id=intent_id,
+            source_run_id=run_id,
+            intent_type=ExecutionIntentType.TRADE,
+            mode=settings_row.mode,
+            status=status,
+            symbol=decision.symbol,
+            direction=decision.direction,
+            quantity=risk_result.approved_quantity,
+            limit_price=decision.entry,
+            stop_loss=decision.stop_loss,
+            take_profit=decision.take_profit,
+            requires_human_approval=requires_human_approval,
+            idempotency_key=f"run:{run_id}",
+            decision_payload=decision.model_dump(mode="json"),
+            risk_payload=risk_result.model_dump(mode="json"),
+            block_reason=block_reason
+            if execution_allowed
+            else (block_reason or "Execution is blocked for the selected broker/profile combination."),
+            metadata_json={
+                "live_enabled_at_queue_time": settings_row.live_enabled,
+                "execution_allowed": execution_allowed,
+            },
+        )
+        self.session.add(intent)
+        self.session.add(
+            AuditLog(
+                action="execution.intent_created",
+                actor="system",
+                actor_role="system",
+                details={
+                    "intent_id": intent.id,
+                    "source_run_id": run_id,
+                    "mode": settings_row.mode.value,
+                    "requires_human_approval": requires_human_approval,
+                    "symbol": decision.symbol,
+                },
+            )
+        )
+        self.session.commit()
+        self.session.refresh(intent)
+        return intent
+
+    def approve_intent(self, intent_id: str, *, actor: str, actor_role: str, session_id: str | None = None) -> ExecutionIntent:
+        intent = self._require_intent(intent_id)
+        if intent.status != ExecutionIntentStatus.PENDING_APPROVAL:
+            raise ValueError("Only pending intents can be approved.")
+        intent.status = ExecutionIntentStatus.APPROVED
+        intent.approved_by = actor
+        intent.approved_at = datetime.now(UTC)
+        intent.block_reason = None
+        self.session.add(
+            AuditLog(
+                action="execution.intent_approved",
+                actor=actor,
+                actor_role=actor_role,
+                session_id=session_id,
+                details={"intent_id": intent.id, "symbol": intent.symbol, "mode": intent.mode.value},
+            )
+        )
+        self.session.commit()
+        self.session.refresh(intent)
+        return intent
+
+    def reject_intent(
+        self,
+        intent_id: str,
+        *,
+        actor: str,
+        actor_role: str,
+        reason: str,
+        session_id: str | None = None,
+    ) -> ExecutionIntent:
+        intent = self._require_intent(intent_id)
+        if intent.status in {ExecutionIntentStatus.EXECUTED, ExecutionIntentStatus.EXECUTING}:
+            raise ValueError("Executed intents cannot be rejected.")
+        intent.status = ExecutionIntentStatus.REJECTED
+        intent.block_reason = reason
+        self.session.add(
+            AuditLog(
+                action="execution.intent_rejected",
+                actor=actor,
+                actor_role=actor_role,
+                session_id=session_id,
+                details={"intent_id": intent.id, "symbol": intent.symbol, "reason": reason},
+            )
+        )
+        self.session.commit()
+        self.session.refresh(intent)
+        return intent
+
+    def execute_intent(self, intent_id: str, *, settings_row: BotSettings) -> OrderRecord | None:
+        intent = self._require_intent(intent_id)
+        if intent.status == ExecutionIntentStatus.EXECUTED:
+            return self.session.scalar(select(OrderRecord).where(OrderRecord.execution_intent_id == intent.id))
+        if intent.status != ExecutionIntentStatus.APPROVED:
+            raise ValueError("Only approved intents can be executed.")
+        if intent.intent_type != ExecutionIntentType.TRADE:
+            raise ValueError(f"Unsupported execution intent type: {intent.intent_type.value}")
+
+        session_state = MarketCalendarService.for_settings(settings_row).session_state(
+            trading_pattern=settings_row.trading_pattern,
+            instrument_class=settings_row.instrument_class,
+        )
+        if settings_row.kill_switch_enabled:
+            return self._block_intent(intent, "Kill switch is enabled.")
+        if settings_row.mode != intent.mode:
+            return self._block_intent(intent, "Bot mode changed after the intent was approved.")
+        if intent.mode == TradingMode.LIVE and not settings_row.live_enabled:
+            return self._block_intent(intent, "Live execution is not enabled.")
+        if intent.mode == TradingMode.LIVE:
+            from tradingbot.services.store import live_trading_env_allowed
+
+            if not live_trading_env_allowed(settings_row):
+                return self._block_intent(intent, "This environment is not allowlisted for live execution.")
+        if not session_state.can_submit_orders:
+            return self._block_intent(intent, session_state.reason or "Order submission is blocked outside session hours.")
+
+        try:
+            self.broker.get_account_snapshot()
+        except BrokerAPIError as exc:
+            return self._fail_intent(intent, f"Broker connectivity check failed: {exc}")
+
+        decision = CommitteeDecision.model_validate(intent.decision_payload)
+        risk_result = RiskCheckResult.model_validate(intent.risk_payload)
+        intent.status = ExecutionIntentStatus.EXECUTING
+        self.session.commit()
+
+        order = self.submit_trade(
+            mode=intent.mode,
+            decision=decision,
+            risk_result=risk_result,
+            execution_allowed=True,
+            block_reason=intent.block_reason,
+            instrument_class=settings_row.instrument_class or InstrumentClass.CASH_EQUITY,
+            execution_intent_id=intent.id,
+        )
+        if order is None or order.status == OrderStatus.REJECTED:
+            return self._fail_intent(intent, "Order submission did not complete successfully.")
+
+        intent.status = ExecutionIntentStatus.EXECUTED
+        intent.executed_at = datetime.now(UTC)
+        intent.last_error = None
+        self.session.add(
+            AuditLog(
+                action="execution.intent_executed",
+                actor="system",
+                actor_role="system",
+                details={"intent_id": intent.id, "order_id": order.id, "broker_order_id": order.broker_order_id},
+            )
+        )
+        self.session.commit()
+        self.session.refresh(order)
+        return order
 
     def submit_trade(
         self,
@@ -25,6 +274,8 @@ class ExecutionService:
         risk_result: RiskCheckResult,
         execution_allowed: bool = True,
         block_reason: str | None = None,
+        instrument_class: InstrumentClass = InstrumentClass.CASH_EQUITY,
+        execution_intent_id: str | None = None,
     ) -> OrderRecord | None:
         if not execution_allowed:
             self.session.add(
@@ -53,51 +304,542 @@ class ExecutionService:
             return None
 
         client_order_id = f"{decision.symbol.lower()}-{uuid4().hex[:20]}"
-        submission = OrderSubmission(
+        request = OrderRequest(
             symbol=decision.symbol,
             quantity=risk_result.approved_quantity,
+            side=OrderIntent.BUY,
+            order_type=OrderType.BRACKET,
             limit_price=decision.entry,
             stop_loss=decision.stop_loss,
             take_profit=decision.take_profit,
             client_order_id=client_order_id,
         )
-        broker_payload = self.broker.submit_bracket_order(submission)
+
+        account_snapshot = self.broker.get_account_snapshot()
+        pretrade_result = self.pretrade.validate(
+            order=request,
+            instrument_class=instrument_class,
+            account=account_snapshot,
+        )
+        if not pretrade_result.accepted:
+            self.session.add(
+                RiskEvent(
+                    symbol=decision.symbol,
+                    severity="warning",
+                    code="pretrade_rejected",
+                    message="Order blocked by pre-trade broker/exchange validation.",
+                    payload={"reasons": pretrade_result.reasons},
+                )
+            )
+            self.session.commit()
+            return None
 
         order = OrderRecord(
+            execution_intent_id=execution_intent_id,
             symbol=decision.symbol,
             mode=mode,
             direction=OrderIntent.BUY,
+            order_type=OrderType.BRACKET,
             quantity=risk_result.approved_quantity,
             limit_price=decision.entry,
             stop_loss=decision.stop_loss,
+            stop_price=decision.stop_loss,
             take_profit=decision.take_profit,
-            status=broker_payload.get("status", "accepted"),
+            status=OrderStatus.NEW,
             client_order_id=client_order_id,
-            broker_order_id=broker_payload.get("id"),
             submitted_at=datetime.now(UTC),
-            metadata_json=broker_payload,
+            metadata_json={"decision": decision.model_dump(mode="json")},
         )
-        position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == decision.symbol))
-        if position is None:
-            position = PositionRecord(
-                symbol=decision.symbol,
-                quantity=risk_result.approved_quantity,
-                average_entry_price=decision.entry,
-                market_value=decision.entry * risk_result.approved_quantity,
-                unrealized_pl=0,
-                side="long",
-            )
-            self.session.add(position)
-        else:
-            position.quantity += risk_result.approved_quantity
-            position.average_entry_price = decision.entry
-            position.market_value = position.quantity * decision.entry
-
         self.session.add(order)
+        self.session.flush()
+        self._transition_order(
+            order,
+            to_status=OrderStatus.NEW,
+            source="local",
+            message="Local order intent created.",
+            payload={"client_order_id": client_order_id},
+        )
+
+        try:
+            broker_order = self.broker.place_order(request)
+        except Exception as exc:  # noqa: BLE001
+            self._transition_order(
+                order,
+                to_status=OrderStatus.REJECTED,
+                source="broker",
+                message=f"Broker rejected order submission: {exc}",
+                payload={"error": str(exc)},
+                force=True,
+            )
+            self.session.add(
+                RiskEvent(
+                    symbol=decision.symbol,
+                    severity="critical",
+                    code="broker_submit_failed",
+                    message="Broker order submission failed.",
+                    payload={"error": str(exc)},
+                )
+            )
+            self.session.commit()
+            return order
+
+        self.apply_broker_order_update(order, broker_order, source="broker_submit")
         self.session.commit()
         self.session.refresh(order)
         return order
 
+    def replace_order(self, order_id: int, patch: ReplaceOrderRequest) -> OrderRecord:
+        order = self._require_order(order_id)
+        if not order.broker_order_id:
+            raise ValueError("Cannot replace an order without a broker_order_id.")
+
+        broker_order = self.broker.replace_order(order.broker_order_id, patch)
+        self._transition_order(
+            order,
+            to_status=OrderStatus.REPLACED,
+            source="broker",
+            message="Replace request accepted by broker.",
+            payload={"patch": _serialize_replace_patch(patch)},
+            force=True,
+        )
+        self.apply_broker_order_update(order, broker_order, source="broker_replace")
+        self.session.commit()
+        self.session.refresh(order)
+        return order
+
+    def cancel_order(self, order_id: int) -> OrderRecord:
+        order = self._require_order(order_id)
+        if not order.broker_order_id:
+            raise ValueError("Cannot cancel an order without a broker_order_id.")
+
+        self.broker.cancel_order(order.broker_order_id)
+        self._transition_order(
+            order,
+            to_status=OrderStatus.CANCELED,
+            source="broker",
+            message="Cancel request acknowledged.",
+            payload={},
+            force=True,
+        )
+        self.session.commit()
+        self.session.refresh(order)
+        return order
+
+    def cancel_all_open_orders(self) -> int:
+        canceled_count = self.broker.cancel_all_orders()
+        local_open_orders = self.session.scalars(
+            select(OrderRecord).where(OrderRecord.status.notin_(tuple(TERMINAL_STATUSES)))
+        ).all()
+        for order in local_open_orders:
+            self._transition_order(
+                order,
+                to_status=OrderStatus.CANCELED,
+                source="broker",
+                message="Canceled by cancel-all command.",
+                payload={},
+                force=True,
+            )
+        self.session.commit()
+        return canceled_count
+
+    def apply_broker_order_update(self, order: OrderRecord, broker_order: BrokerOrder, *, source: str) -> bool:
+        changed = False
+        order.broker_order_id = broker_order.broker_order_id or order.broker_order_id
+        order.status_reason = broker_order.status_reason
+        order.quantity = broker_order.quantity or order.quantity
+        order.filled_quantity = max(order.filled_quantity, broker_order.filled_quantity)
+        order.average_fill_price = broker_order.average_fill_price or order.average_fill_price
+        order.limit_price = broker_order.limit_price if broker_order.limit_price is not None else order.limit_price
+        order.stop_price = broker_order.stop_price if broker_order.stop_price is not None else order.stop_price
+        order.take_profit = broker_order.take_profit if broker_order.take_profit is not None else order.take_profit
+        order.trailing_percent = (
+            broker_order.trailing_percent if broker_order.trailing_percent is not None else order.trailing_percent
+        )
+        order.trailing_amount = broker_order.trailing_amount if broker_order.trailing_amount is not None else order.trailing_amount
+        order.last_broker_update_at = broker_order.updated_at or datetime.now(UTC)
+        order.metadata_json = {
+            **(order.metadata_json or {}),
+            "last_broker_snapshot": broker_order.raw,
+        }
+
+        if order.status != broker_order.status:
+            changed = self._transition_order(
+                order,
+                to_status=broker_order.status,
+                source=source,
+                message=broker_order.status_reason or "Broker status update.",
+                payload={"broker_order_id": broker_order.broker_order_id},
+            )
+
+        return changed
+
+    def ingest_broker_fill(self, fill: BrokerFill, *, source: str) -> bool:
+        if fill.broker_fill_id:
+            existing = self.session.scalar(select(OrderFill).where(OrderFill.broker_fill_id == fill.broker_fill_id))
+            if existing is not None:
+                return False
+
+        order = None
+        if fill.broker_order_id:
+            order = self.session.scalar(select(OrderRecord).where(OrderRecord.broker_order_id == fill.broker_order_id))
+        if order is None:
+            order = self.session.scalar(
+                select(OrderRecord)
+                .where(OrderRecord.symbol == fill.symbol)
+                .where(OrderRecord.status.notin_(tuple(TERMINAL_STATUSES)))
+                .order_by(OrderRecord.created_at.desc())
+            )
+        if order is None:
+            return False
+
+        self.session.add(
+            OrderFill(
+                order_id=order.id,
+                broker_fill_id=fill.broker_fill_id,
+                broker_order_id=fill.broker_order_id,
+                symbol=fill.symbol,
+                side=fill.side,
+                quantity=fill.quantity,
+                price=fill.price,
+                fee=fill.fee,
+                filled_at=fill.filled_at,
+                payload=fill.raw,
+            )
+        )
+
+        order.filled_quantity = min(order.quantity, order.filled_quantity + fill.quantity)
+        if order.average_fill_price is None:
+            order.average_fill_price = fill.price
+        else:
+            weighted_total = (order.average_fill_price * max(order.filled_quantity - fill.quantity, 0)) + (
+                fill.price * fill.quantity
+            )
+            order.average_fill_price = weighted_total / max(order.filled_quantity, 1)
+
+        target_status = (
+            OrderStatus.FILLED if order.filled_quantity >= order.quantity else OrderStatus.PARTIALLY_FILLED
+        )
+        self._transition_order(
+            order,
+            to_status=target_status,
+            source=source,
+            message="Broker fill ingested.",
+            payload={"fill_id": fill.broker_fill_id, "qty": fill.quantity, "price": fill.price},
+            force=True,
+        )
+        self._apply_fill_to_position(order.symbol, fill.quantity, fill.price, fill.side)
+        return True
+
+    def sync_positions_snapshot(self, broker_positions: list[BrokerPosition], *, source: str) -> None:
+        local_positions = self.session.scalars(select(PositionRecord)).all()
+        local_by_symbol = {row.symbol: row for row in local_positions}
+
+        seen_symbols: set[str] = set()
+        for broker_position in broker_positions:
+            symbol = broker_position.symbol.upper().strip()
+            seen_symbols.add(symbol)
+            local = local_by_symbol.get(symbol)
+            if local is None:
+                local = PositionRecord(
+                    symbol=symbol,
+                    quantity=broker_position.quantity,
+                    average_entry_price=broker_position.average_entry_price,
+                    market_value=broker_position.market_value,
+                    unrealized_pl=broker_position.unrealized_pl,
+                    side=broker_position.side,
+                    broker_position_id=broker_position.broker_position_id,
+                )
+                self.session.add(local)
+            else:
+                local.quantity = broker_position.quantity
+                local.average_entry_price = broker_position.average_entry_price
+                local.market_value = broker_position.market_value
+                local.unrealized_pl = broker_position.unrealized_pl
+                local.side = broker_position.side
+                local.broker_position_id = broker_position.broker_position_id
+
+        for symbol, position in local_by_symbol.items():
+            if symbol in seen_symbols:
+                continue
+            self.session.delete(position)
+
+        self.session.flush()
+
+    def repair_broken_child_orders(self) -> int:
+        repaired = 0
+        parent_orders = self.session.scalars(
+            select(OrderRecord)
+            .where(OrderRecord.order_type == OrderType.BRACKET)
+            .where(OrderRecord.status.in_([OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED]))
+            .where(OrderRecord.filled_quantity > 0)
+        ).all()
+
+        for parent in parent_orders:
+            children = self.session.scalars(select(OrderRecord).where(OrderRecord.parent_order_id == parent.id)).all()
+            has_stop = any(child.order_type in {OrderType.STOP_MARKET, OrderType.STOP_LIMIT} for child in children)
+            has_take_profit = any(child.order_type == OrderType.LIMIT for child in children)
+
+            required_qty = parent.filled_quantity
+            if required_qty <= 0:
+                continue
+
+            if not has_stop and parent.stop_loss:
+                self._submit_child_order(
+                    parent,
+                    OrderRequest(
+                        symbol=parent.symbol,
+                        quantity=required_qty,
+                        side=OrderIntent.SELL,
+                        order_type=OrderType.STOP_MARKET,
+                        stop_price=parent.stop_loss,
+                    ),
+                    reason="Repaired missing stop-loss child order.",
+                )
+                repaired += 1
+
+            if not has_take_profit and parent.take_profit:
+                self._submit_child_order(
+                    parent,
+                    OrderRequest(
+                        symbol=parent.symbol,
+                        quantity=required_qty,
+                        side=OrderIntent.SELL,
+                        order_type=OrderType.LIMIT,
+                        limit_price=parent.take_profit,
+                    ),
+                    reason="Repaired missing take-profit child order.",
+                )
+                repaired += 1
+
+        self.session.commit()
+        return repaired
+
+    def flatten_all_positions(
+        self,
+        *,
+        mode: TradingMode,
+        actor: str = "system",
+        actor_role: str = "system",
+        session_id: str | None = None,
+        reason: str = "manual_flatten",
+    ) -> int:
+        local_positions = self.session.scalars(select(PositionRecord).where(PositionRecord.quantity > 0)).all()
+        flatten_submitted = self.broker.close_all_positions()
+        for position in local_positions:
+            self.session.delete(position)
+        self.session.add(
+            AuditLog(
+                action="execution.flatten_all",
+                actor=actor,
+                actor_role=actor_role,
+                session_id=session_id,
+                details={"mode": mode.value, "flattened_positions": len(local_positions), "reason": reason},
+            )
+        )
+        self.session.commit()
+        return flatten_submitted
+
+    def broker_kill(
+        self,
+        *,
+        actor: str,
+        actor_role: str,
+        session_id: str | None = None,
+        reason: str = "broker_kill",
+    ) -> int:
+        canceled_orders = self.cancel_all_open_orders()
+        self.session.add(
+            AuditLog(
+                action="execution.broker_kill",
+                actor=actor,
+                actor_role=actor_role,
+                session_id=session_id,
+                details={"canceled_orders": canceled_orders, "reason": reason},
+            )
+        )
+        self.session.commit()
+        return canceled_orders
+
+    def list_order_transitions(self, order_id: int) -> list[OrderStateTransition]:
+        return self.session.scalars(
+            select(OrderStateTransition)
+            .where(OrderStateTransition.order_id == order_id)
+            .order_by(OrderStateTransition.transition_at.asc())
+        ).all()
+
+    def list_order_fills(self, order_id: int) -> list[OrderFill]:
+        return self.session.scalars(
+            select(OrderFill)
+            .where(OrderFill.order_id == order_id)
+            .order_by(OrderFill.filled_at.asc())
+        ).all()
+
     def current_symbol_exposure(self, symbol: str) -> float:
-        position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == symbol))
+        position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == symbol.upper().strip()))
         return position.market_value if position else 0.0
+
+    def _require_order(self, order_id: int) -> OrderRecord:
+        row = self.session.get(OrderRecord, order_id)
+        if row is None:
+            raise ValueError(f"Order {order_id} was not found.")
+        return row
+
+    def _require_intent(self, intent_id: str) -> ExecutionIntent:
+        row = self.session.get(ExecutionIntent, intent_id)
+        if row is None:
+            raise ValueError(f"Execution intent {intent_id} was not found.")
+        return row
+
+    def _block_intent(self, intent: ExecutionIntent, reason: str) -> None:
+        intent.status = ExecutionIntentStatus.BLOCKED
+        intent.block_reason = reason
+        intent.failed_at = datetime.now(UTC)
+        self.session.add(
+            AuditLog(
+                action="execution.intent_blocked",
+                actor="system",
+                actor_role="system",
+                details={"intent_id": intent.id, "reason": reason},
+            )
+        )
+        self.session.commit()
+        return None
+
+    def _fail_intent(self, intent: ExecutionIntent, reason: str) -> None:
+        intent.status = ExecutionIntentStatus.FAILED
+        intent.last_error = reason
+        intent.failed_at = datetime.now(UTC)
+        self.session.add(
+            AuditLog(
+                action="execution.intent_failed",
+                actor="system",
+                actor_role="system",
+                details={"intent_id": intent.id, "reason": reason},
+            )
+        )
+        self.session.commit()
+        return None
+
+    def _submit_child_order(self, parent: OrderRecord, request: OrderRequest, *, reason: str) -> None:
+        client_order_id = f"child-{parent.id}-{uuid4().hex[:12]}"
+        request.client_order_id = client_order_id
+        local_child = OrderRecord(
+            symbol=request.symbol,
+            mode=parent.mode,
+            direction=request.side,
+            order_type=request.order_type,
+            quantity=request.quantity,
+            limit_price=request.limit_price,
+            stop_price=request.stop_price,
+            stop_loss=request.stop_loss,
+            take_profit=request.take_profit,
+            status=OrderStatus.NEW,
+            client_order_id=client_order_id,
+            parent_order_id=parent.id,
+            submitted_at=datetime.now(UTC),
+            metadata_json={"repair_reason": reason},
+        )
+        self.session.add(local_child)
+        self.session.flush()
+        self._transition_order(local_child, to_status=OrderStatus.NEW, source="local", message=reason, payload={})
+        broker_child = self.broker.place_order(request)
+        self.apply_broker_order_update(local_child, broker_child, source="repair")
+
+    def _transition_order(
+        self,
+        order: OrderRecord,
+        *,
+        to_status: OrderStatus,
+        source: str,
+        message: str,
+        payload: dict,
+        force: bool = False,
+    ) -> bool:
+        current_status = order.status
+        if current_status == to_status and not force:
+            return False
+
+        allowed = STATE_TRANSITIONS.get(current_status, set())
+        if not force and to_status not in allowed:
+            self.session.add(
+                RiskEvent(
+                    symbol=order.symbol,
+                    severity="warning",
+                    code="order_invalid_transition",
+                    message=(
+                        f"Blocked invalid order-state transition from {current_status.value} to {to_status.value}."
+                    ),
+                    payload={"order_id": order.id, "source": source},
+                )
+            )
+            to_status = OrderStatus.SUSPENDED
+            message = f"Order moved to suspended due to invalid transition attempt: {message}"
+
+        if current_status == to_status:
+            return False
+
+        transition = OrderStateTransition(
+            order_id=order.id,
+            symbol=order.symbol,
+            from_status=current_status,
+            to_status=to_status,
+            transition_at=datetime.now(UTC),
+            source=source,
+            message=message,
+            payload=payload,
+        )
+        self.session.add(transition)
+        order.status = to_status
+        order.status_reason = message
+        order.last_broker_update_at = datetime.now(UTC)
+        return True
+
+    def _apply_fill_to_position(self, symbol: str, quantity: int, price: float, side: str) -> None:
+        normalized_symbol = symbol.upper().strip()
+        position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == normalized_symbol))
+        buy_fill = side.lower() == "buy"
+
+        if position is None and not buy_fill:
+            return
+
+        if position is None:
+            position = PositionRecord(
+                symbol=normalized_symbol,
+                quantity=quantity,
+                average_entry_price=price,
+                market_value=quantity * price,
+                unrealized_pl=0.0,
+                side="long",
+            )
+            self.session.add(position)
+            return
+
+        if buy_fill:
+            new_qty = position.quantity + quantity
+            weighted_total = (position.average_entry_price * position.quantity) + (price * quantity)
+            position.quantity = new_qty
+            position.average_entry_price = weighted_total / max(new_qty, 1)
+            position.market_value = position.quantity * position.average_entry_price
+            position.side = "long"
+        else:
+            position.quantity = max(position.quantity - quantity, 0)
+            if position.quantity == 0:
+                self.session.delete(position)
+            else:
+                position.market_value = position.quantity * position.average_entry_price
+
+
+
+def _serialize_replace_patch(patch: ReplaceOrderRequest) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    if patch.quantity is not None:
+        payload["quantity"] = patch.quantity
+    if patch.limit_price is not None:
+        payload["limit_price"] = patch.limit_price
+    if patch.stop_price is not None:
+        payload["stop_price"] = patch.stop_price
+    if patch.take_profit is not None:
+        payload["take_profit"] = patch.take_profit
+    if patch.time_in_force is not None:
+        payload["time_in_force"] = patch.time_in_force.value
+    return payload

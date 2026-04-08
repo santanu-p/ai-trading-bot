@@ -23,7 +23,7 @@ For this repo, production-hardened means:
 The current repo is still a scaffold. It has API, worker, dashboard, risk checks, and a narrow broker path, but it does not yet have:
 
 - infrastructure as code
-- hardened auth/session handling
+- full production-grade auth hardening such as CSRF protection, rate limiting, and external secret rotation
 - secrets rotation
 - full order lifecycle tracking
 - broker reconciliation
@@ -68,7 +68,7 @@ Suggested baseline topology:
 4. `postgres` as a managed database with backups and point-in-time recovery
 5. `redis` as a managed instance
 6. centralized log and metrics backend
-7. secrets manager for provider keys and JWT material
+7. secrets manager for provider keys and session-secret material
 
 ## Phase 1: Stabilize The Core Runtime
 
@@ -187,11 +187,11 @@ Goal:
 
 Required changes:
 
-- replace `localStorage` token handling with secure cookies or short-lived access plus refresh tokens
+- extend the current secure-cookie session model with CSRF protection, rate limiting, and stricter secret handling
 - add role-based access for operator, reviewer, and admin
 - add session expiry and forced logout
 - store production secrets in a secrets manager
-- rotate JWT and provider credentials
+- rotate session secrets and provider credentials
 - add IP and user audit history for sensitive actions
 - add rate limiting and request size limits
 - add CSRF protection if cookie auth is used
@@ -338,7 +338,7 @@ Before enabling real live trading, confirm:
 4. Build a real order state model with transition history.
 5. Add broker reconciliation and drift-triggered live halt.
 6. Add market-calendar and session gating.
-7. Replace dashboard token storage with hardened auth/session handling.
+7. Add the remaining production auth hardening around the current secure-cookie session model.
 8. Add structured logs, metrics, and critical alerts.
 9. Create staging and paper-soak deployment workflow.
 10. Write incident runbooks for broker outage, stale data, and runaway execution.

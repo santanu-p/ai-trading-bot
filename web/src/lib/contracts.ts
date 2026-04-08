@@ -2,6 +2,19 @@ export type TradingMode = "paper" | "live";
 export type BotStatus = "running" | "stopped";
 export type RiskDecision = "approved" | "rejected";
 export type OrderIntent = "buy" | "sell" | "hold";
+export type OrderType = "market" | "limit" | "stop_market" | "stop_limit" | "bracket" | "oco" | "trailing_stop";
+export type TimeInForce = "day" | "gtc" | "ioc" | "fok";
+export type OrderStatus =
+  | "new"
+  | "accepted"
+  | "pending_trigger"
+  | "partially_filled"
+  | "filled"
+  | "canceled"
+  | "expired"
+  | "replaced"
+  | "rejected"
+  | "suspended";
 export type BrokerSlug = "alpaca";
 export type TradingPattern =
   | "scalping"
@@ -30,6 +43,17 @@ export type ExecutionSupportStatus =
   | "complete_agent_intake_first"
   | "analysis_only_for_selected_broker"
   | "broker_execution_supported";
+export type OperatorRole = "reviewer" | "operator" | "admin" | "system";
+export type ExecutionIntentStatus =
+  | "pending_approval"
+  | "approved"
+  | "executing"
+  | "executed"
+  | "rejected"
+  | "blocked"
+  | "failed"
+  | "canceled";
+export type ExecutionIntentType = "trade" | "flatten_all" | "broker_kill";
 
 export interface TradingProfile {
   trading_pattern: TradingPattern | null;
@@ -56,10 +80,26 @@ export interface BrokerCapability {
   supported: boolean;
 }
 
+export interface MarketSessionResponse {
+  venue: string;
+  timezone: string;
+  status: string;
+  reason?: string | null;
+  is_half_day: boolean;
+  can_scan: boolean;
+  can_submit_orders: boolean;
+  should_flatten_positions: boolean;
+  session_opens_at?: string | null;
+  session_closes_at?: string | null;
+  next_session_opens_at?: string | null;
+}
+
 export interface BotSettingsResponse {
   status: BotStatus;
   mode: TradingMode;
   kill_switch_enabled: boolean;
+  live_enabled: boolean;
+  live_trading_env_allowed: boolean;
   scan_interval_minutes: number;
   consensus_threshold: number;
   max_open_positions: number;
@@ -77,6 +117,7 @@ export interface BotSettingsResponse {
   execution_support_status: ExecutionSupportStatus;
   live_start_allowed: boolean;
   analysis_only_downgrade_reason?: string | null;
+  market_session: MarketSessionResponse;
 }
 
 export interface BotSettingsUpdatePayload {
@@ -91,6 +132,26 @@ export interface BotSettingsUpdatePayload {
   watchlist: string[];
   broker_settings: BrokerSettings;
   selected_for_analysis: TradingProfile;
+}
+
+export interface LoginResponse {
+  authenticated: boolean;
+  email: string;
+  role: OperatorRole;
+  expires_at: string;
+  session_id: string;
+}
+
+export interface SessionResponse {
+  session_id: string;
+  email: string;
+  role: OperatorRole;
+  expires_at: string;
+  current: boolean;
+  user_agent?: string | null;
+  ip_address?: string | null;
+  last_seen_at?: string | null;
+  revoked_at?: string | null;
 }
 
 export interface CommitteeDecision {
@@ -119,19 +180,79 @@ export interface RunResponse {
   decision_payload?: Record<string, unknown> | null;
 }
 
+export interface ExecutionIntentResponse {
+  id: string;
+  source_run_id?: string | null;
+  intent_type: ExecutionIntentType;
+  mode: TradingMode;
+  status: ExecutionIntentStatus;
+  symbol?: string | null;
+  direction?: OrderIntent | null;
+  quantity?: number | null;
+  limit_price?: number | null;
+  stop_loss?: number | null;
+  take_profit?: number | null;
+  requires_human_approval: boolean;
+  block_reason?: string | null;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  executed_at?: string | null;
+  failed_at?: string | null;
+  last_error?: string | null;
+  created_at: string;
+}
+
 export interface OrderResponse {
   id: number;
   symbol: string;
   mode: TradingMode;
   direction: OrderIntent;
+  order_type: OrderType;
+  time_in_force: TimeInForce;
   quantity: number;
-  limit_price: number;
-  stop_loss: number;
-  take_profit: number;
-  status: string;
+  filled_quantity: number;
+  average_fill_price?: number | null;
+  limit_price?: number | null;
+  stop_loss?: number | null;
+  stop_price?: number | null;
+  take_profit?: number | null;
+  trailing_percent?: number | null;
+  trailing_amount?: number | null;
+  status: OrderStatus;
+  status_reason?: string | null;
   client_order_id: string;
   broker_order_id?: string | null;
+  parent_order_id?: number | null;
+  replaced_by_order_id?: number | null;
   submitted_at?: string | null;
+  last_broker_update_at?: string | null;
+}
+
+export interface OrderTransitionResponse {
+  id: number;
+  order_id: number;
+  symbol: string;
+  from_status?: OrderStatus | null;
+  to_status: OrderStatus;
+  transition_at: string;
+  source: string;
+  broker_event_id?: string | null;
+  message: string;
+  payload: Record<string, unknown>;
+}
+
+export interface OrderFillResponse {
+  id: number;
+  order_id: number;
+  broker_fill_id?: string | null;
+  broker_order_id?: string | null;
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  fee: number;
+  filled_at: string;
+  payload: Record<string, unknown>;
 }
 
 export interface PositionResponse {
@@ -152,4 +273,39 @@ export interface RiskEventResponse {
   message: string;
   payload: Record<string, unknown>;
   created_at: string;
+}
+
+export interface AuditLogResponse {
+  id: number;
+  action: string;
+  actor: string;
+  actor_role: string;
+  session_id?: string | null;
+  details: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ReconciliationMismatchResponse {
+  id: number;
+  broker_slug: BrokerSlug;
+  symbol?: string | null;
+  mismatch_type: string;
+  severity: string;
+  local_reference?: string | null;
+  broker_reference?: string | null;
+  details: Record<string, unknown>;
+  resolved: boolean;
+  resolved_at?: string | null;
+  created_at: string;
+}
+
+export interface LiveEnablePrepareResponse {
+  approval_code: string;
+  expires_at: string;
+  live_trading_env_allowed: boolean;
+}
+
+export interface ActionResponse {
+  accepted: boolean;
+  detail: string;
 }

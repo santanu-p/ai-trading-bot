@@ -10,6 +10,7 @@ from tradingbot.schemas.settings import (
     BotSettingsUpdate,
     BrokerCapability,
     BrokerSettings,
+    MarketSessionResponse,
     TradingProfile,
 )
 from tradingbot.services.broker_capabilities import (
@@ -18,6 +19,7 @@ from tradingbot.services.broker_capabilities import (
     normalize_permissions,
     resolve_execution_support as resolve_profile_execution_support,
 )
+from tradingbot.services.calendar import MarketCalendarService
 
 
 def ensure_bot_settings(session: Session) -> BotSettings:
@@ -99,6 +101,15 @@ def resolve_execution_support(settings_row: BotSettings) -> ExecutionSupportSumm
     return resolve_profile_execution_support(serialize_selected_for_analysis(settings_row), broker_definition)
 
 
+def live_trading_env_allowed(settings_row: BotSettings) -> bool:
+    settings = get_settings()
+    if not settings.allow_live_trading:
+        return False
+    if not settings.live_trading_allowed_brokers:
+        return False
+    return settings_row.broker_slug.value in settings.live_trading_allowed_brokers
+
+
 def execution_support_status(settings_row: BotSettings) -> str:
     return resolve_execution_support(settings_row).status
 
@@ -116,10 +127,17 @@ def serialize_settings(session: Session, settings_row: BotSettings) -> BotSettin
     ).all()
     broker_definition = get_broker_definition(settings_row.broker_slug)
     support = resolve_execution_support(settings_row)
+    session_state = MarketCalendarService.for_settings(settings_row).session_state(
+        trading_pattern=settings_row.trading_pattern,
+        instrument_class=settings_row.instrument_class,
+    )
+    live_mode_allowed = support.live_start_allowed and live_trading_env_allowed(settings_row)
     return BotSettingsResponse(
         status=settings_row.status,
         mode=settings_row.mode,
         kill_switch_enabled=settings_row.kill_switch_enabled,
+        live_enabled=settings_row.live_enabled,
+        live_trading_env_allowed=live_trading_env_allowed(settings_row),
         scan_interval_minutes=settings_row.scan_interval_minutes,
         consensus_threshold=settings_row.consensus_threshold,
         max_open_positions=settings_row.max_open_positions,
@@ -143,13 +161,33 @@ def serialize_settings(session: Session, settings_row: BotSettings) -> BotSettin
         supported_for_execution=support.supported_for_execution,
         strategy_profile_completed=strategy_profile_completed(settings_row),
         execution_support_status=support.status,
-        live_start_allowed=support.live_start_allowed,
+        live_start_allowed=live_mode_allowed,
         analysis_only_downgrade_reason=settings_row.analysis_only_downgrade_reason
         or support.analysis_only_downgrade_reason,
+        market_session=MarketSessionResponse(
+            venue=session_state.venue,
+            timezone=session_state.timezone,
+            status=session_state.status,
+            reason=session_state.reason,
+            is_half_day=session_state.is_half_day,
+            can_scan=session_state.can_scan,
+            can_submit_orders=session_state.can_submit_orders,
+            should_flatten_positions=session_state.should_flatten_positions,
+            session_opens_at=session_state.session_opens_at,
+            session_closes_at=session_state.session_closes_at,
+            next_session_opens_at=session_state.next_session_opens_at,
+        ),
     )
 
 
-def apply_settings_update(session: Session, payload: BotSettingsUpdate) -> BotSettings:
+def apply_settings_update(
+    session: Session,
+    payload: BotSettingsUpdate,
+    *,
+    actor: str = "admin",
+    actor_role: str = "admin",
+    session_id: str | None = None,
+) -> BotSettings:
     settings_row = ensure_bot_settings(session)
     settings_row.scan_interval_minutes = payload.scan_interval_minutes
     settings_row.consensus_threshold = payload.consensus_threshold
@@ -173,11 +211,17 @@ def apply_settings_update(session: Session, payload: BotSettingsUpdate) -> BotSe
     settings_row.market_universe = payload.selected_for_analysis.market_universe
     settings_row.profile_notes = payload.selected_for_analysis.profile_notes.strip()
     settings_row.analysis_only_downgrade_reason = resolve_execution_support(settings_row).analysis_only_downgrade_reason
+    if not live_trading_env_allowed(settings_row) or resolve_execution_support(settings_row).supported_for_execution is None:
+        settings_row.live_enabled = False
+    settings_row.live_enable_code_hash = None
+    settings_row.live_enable_code_expires_at = None
     replace_watchlist(session, payload.watchlist)
     session.add(
         AuditLog(
             action="settings.updated",
-            actor="admin",
+            actor=actor,
+            actor_role=actor_role,
+            session_id=session_id,
             details={
                 "watchlist_size": len(payload.watchlist),
                 "openai_model": payload.openai_model,

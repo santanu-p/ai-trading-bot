@@ -28,8 +28,9 @@ The original plan assumed a managed backend platform alongside Vercel.
 
 - Do not enable live mode by default.
 - Separate paper and live credentials if you extend the configuration surface later.
-- Treat `JWT_SECRET` and provider keys as platform-managed secrets.
+- Treat `SESSION_SECRET` and provider keys as platform-managed secrets.
 - Ensure the worker and API share the same database and Redis.
+- Run `alembic upgrade head` before starting API or worker revisions.
 - Set the frontend origin and API base URL consistently.
 
 ## Missing Production Hardening
@@ -43,6 +44,6 @@ This scaffold does not yet include:
 - audit retention policies
 - health/readiness probes beyond `/health`
 - observability stack wiring
-- scheduled trading-calendar gating
+- CSRF hardening for cookie-based auth
 
 For the step-by-step path from this scaffold to a hardened deployment target, see [production-hardening-plan.md](production-hardening-plan.md).

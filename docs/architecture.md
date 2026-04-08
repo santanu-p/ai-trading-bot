@@ -63,7 +63,9 @@ Responsibilities:
 - indicator computation
 - committee proposal/finalization
 - deterministic risk validation
+- market calendar/session enforcement
 - execution persistence
+- execution intent queuing and approval handling
 - settings persistence
 - backtest orchestration
 
@@ -76,6 +78,7 @@ Responsibilities:
 - task registration
 - beat schedule
 - recurring market scans
+- execution-intent dispatch
 - asynchronous backtests
 
 ## Trading Decision Flow
@@ -118,9 +121,13 @@ The risk engine checks:
 - current symbol exposure
 - cooldown state
 
-### 6. Execution
+### 6. Intent handoff
 
-If approved, the execution service submits a bracket order through the broker adapter and persists the result.
+If approved, the worker persists an execution intent instead of submitting inline.
+
+### 7. Execution boundary
+
+A dedicated execution task re-checks kill switch state, market session, live enablement, and broker connectivity before broker submission.
 
 ## Storage Model
 
@@ -128,22 +135,25 @@ Current ORM models cover:
 
 - `bot_settings`
 - `watchlist_symbols`
+- `operator_sessions`
 - `agent_runs`
 - `trade_candidates`
+- `execution_intents`
 - `orders`
+- `order_state_transitions`
+- `order_fills`
 - `positions`
+- `instrument_contracts`
+- `reconciliation_mismatches`
 - `risk_events`
 - `portfolio_snapshots`
 - `audit_logs`
 
-The current app boot path uses `Base.metadata.create_all(...)` on startup when `AUTO_CREATE_TABLES` is enabled.
+Schema evolution is versioned with Alembic under `backend/alembic/`.
 
 ## Current Limitations
 
-- No Alembic migration flow is wired yet
-- No explicit market-hours calendar enforcement yet
 - No websocket/event streaming
-- No account reconciliation worker
 - No sector exposure model
-- No human approval queue for live trading
-
+- Frontend build/type validation was not run in this task because local Node dependencies were intentionally not installed
+- The current auth/session layer is stronger than the original scaffold, but still needs production extras such as CSRF hardening, rate limiting, and managed secret rotation

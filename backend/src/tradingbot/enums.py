@@ -30,6 +30,36 @@ class OrderIntent(str, Enum):
     HOLD = "hold"
 
 
+class OrderType(str, Enum):
+    MARKET = "market"
+    LIMIT = "limit"
+    STOP_MARKET = "stop_market"
+    STOP_LIMIT = "stop_limit"
+    BRACKET = "bracket"
+    OCO = "oco"
+    TRAILING_STOP = "trailing_stop"
+
+
+class TimeInForce(str, Enum):
+    DAY = "day"
+    GTC = "gtc"
+    IOC = "ioc"
+    FOK = "fok"
+
+
+class OrderStatus(str, Enum):
+    NEW = "new"
+    ACCEPTED = "accepted"
+    PENDING_TRIGGER = "pending_trigger"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    CANCELED = "canceled"
+    EXPIRED = "expired"
+    REPLACED = "replaced"
+    REJECTED = "rejected"
+    SUSPENDED = "suspended"
+
+
 class RiskDecision(str, Enum):
     APPROVED = "approved"
     REJECTED = "rejected"
@@ -40,6 +70,30 @@ class AgentRole(str, Enum):
     NEWS = "news"
     RISK = "risk"
     COMMITTEE = "committee"
+
+
+class OperatorRole(str, Enum):
+    REVIEWER = "reviewer"
+    OPERATOR = "operator"
+    ADMIN = "admin"
+    SYSTEM = "system"
+
+
+class ExecutionIntentStatus(str, Enum):
+    PENDING_APPROVAL = "pending_approval"
+    APPROVED = "approved"
+    EXECUTING = "executing"
+    EXECUTED = "executed"
+    REJECTED = "rejected"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+class ExecutionIntentType(str, Enum):
+    TRADE = "trade"
+    FLATTEN_ALL = "flatten_all"
+    BROKER_KILL = "broker_kill"
 
 
 class TradingPattern(str, Enum):
@@ -60,6 +114,11 @@ class InstrumentClass(str, Enum):
     FUTURES = "futures"
     OPTIONS = "options"
     MIXED = "mixed"
+
+
+class OptionRight(str, Enum):
+    CALL = "call"
+    PUT = "put"
 
 
 class StrategyFamily(str, Enum):

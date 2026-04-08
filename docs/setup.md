@@ -31,6 +31,7 @@ These were not run during this task.
 ```bash
 cd backend
 pip install -e .[dev]
+alembic upgrade head
 uvicorn tradingbot.api.main:app --reload
 ```
 
@@ -63,11 +64,12 @@ After opening the repo in a Codespace:
 
 1. Wait for `postCreateCommand` to finish installing backend and web dependencies.
 2. Update `.env` with at least:
-   - `JWT_SECRET`
+   - `SESSION_SECRET`
    - `ADMIN_PASSWORD`
    - `OPENAI_API_KEY` or `GEMINI_API_KEY`
    - `ALPACA_API_KEY`
    - `ALPACA_API_SECRET`
+   - `ALLOW_LIVE_TRADING`
 3. Start the API:
 
 ```bash
@@ -94,9 +96,10 @@ The Codespace devcontainer already starts Postgres and Redis as sidecar services
 ## First-Run Checklist
 
 - configure admin credentials
-- configure JWT secret
+- configure session secret
 - configure Alpaca paper credentials
 - configure OpenAI API key
+- run `alembic upgrade head`
 - open the dashboard
 - log in as admin
 - populate a small watchlist
