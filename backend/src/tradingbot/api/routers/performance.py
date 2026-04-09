@@ -173,7 +173,7 @@ async def stream_operations(
         with stream_session_factory() as stream_session:
             stream_session.expire_all()
             snapshot = _operations_snapshot(stream_session)
-        payload = json.dumps(snapshot, separators=(",", ":"), default=str)
+            payload = json.dumps(snapshot, separators=(",", ":"), default=str)
         yield f"event: operations.snapshot\ndata: {payload}\n\n"
 
     return StreamingResponse(
