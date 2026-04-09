@@ -18,6 +18,18 @@ Each entry is expected to carry replay evidence and rollback notes.
 
 ## Releases
 
+### Release ID: phase10-control-plane-ops-v1
+
+- Date (UTC): 2026-04-09
+- Scope: control-plane hardening, operator streaming, and release-governance guardrails
+- Prompt/version changes: none
+- Risk-rule changes: none to trade selection logic; control-plane mutations now require synchronized CSRF tokens and are rate-limited
+- Execution-behavior changes: operator surface now consumes a backend SSE operations stream and alert webhook dispatch can forward operational alerts externally
+- Threshold/config changes: added request-size, rate-limit, SSE poll interval, and alert-webhook configuration surface
+- Replay evidence: not a strategy replay release; regression coverage was added in [backend/tests/test_phase10_control_plane.py](../backend/tests/test_phase10_control_plane.py) and backend Python source was syntax-checked in-memory in this task, with full pytest/type-check deferred to CI because local dependencies were intentionally not installed
+- Rollback plan: remove the control-plane middleware hardening paths, disable the release-guard workflow, and revert the dashboard SSE/trade-review/operator-surface additions if they block operator workflows
+- Approver: admin operator
+
 ### Release ID: phase7-execution-quality-v1
 
 - Date (UTC): 2026-04-08
@@ -26,7 +38,7 @@ Each entry is expected to carry replay evidence and rollback notes.
 - Risk-rule changes: symbol-level execution feedback can throttle size or block new entries
 - Execution-behavior changes: pre-submit spread/slippage/liquidity gating and adaptive aggressiveness
 - Threshold/config changes: execution-quality policy defaults for spread/slippage/liquidity feedback
-- Replay evidence: fixture-based backtest and fill replay tests in [backend/tests/test_phase3_backtest.py](../backend/tests/test_phase3_backtest.py)
+- Replay evidence: execution-quality coverage in [backend/tests/test_phase7_execution_quality.py](../backend/tests/test_phase7_execution_quality.py)
 - Rollback plan: disable execution-quality gating path and revert to baseline bracket submission logic
 - Approver: admin operator
 

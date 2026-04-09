@@ -46,7 +46,10 @@ class Settings:
     session_secret: str = os.getenv("SESSION_SECRET", os.getenv("JWT_SECRET", "change-me"))
     session_expire_minutes: int = _env_int("SESSION_EXPIRE_MINUTES", _env_int("JWT_EXPIRE_MINUTES", 720))
     session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "tradingbot_session")
+    csrf_cookie_name: str = os.getenv("CSRF_COOKIE_NAME", "tradingbot_csrf")
+    csrf_header_name: str = os.getenv("CSRF_HEADER_NAME", "x-csrf-token")
     session_cookie_secure: bool = _env_bool("SESSION_COOKIE_SECURE", os.getenv("ENVIRONMENT", "development") != "development")
+    csrf_origin_enforcement: bool = _env_bool("CSRF_ORIGIN_ENFORCEMENT", True)
     admin_email: str = field(default_factory=lambda: os.getenv("ADMIN_EMAIL", "admin@example.com"))
     admin_password: str | None = field(default_factory=lambda: os.getenv("ADMIN_PASSWORD"))
     admin_password_hash: str | None = field(default_factory=lambda: os.getenv("ADMIN_PASSWORD_HASH"))
@@ -88,6 +91,13 @@ class Settings:
     live_trading_allowed_brokers: tuple[str, ...] = _env_csv("LIVE_TRADING_ALLOWED_BROKERS")
     live_enable_code_ttl_minutes: int = _env_int("LIVE_ENABLE_CODE_TTL_MINUTES", 10)
     intraday_flatten_buffer_minutes: int = _env_int("INTRADAY_FLATTEN_BUFFER_MINUTES", 15)
+    request_body_max_bytes: int = _env_int("REQUEST_BODY_MAX_BYTES", 1_000_000)
+    api_rate_limit_per_minute: int = _env_int("API_RATE_LIMIT_PER_MINUTE", 240)
+    auth_rate_limit_per_minute: int = _env_int("AUTH_RATE_LIMIT_PER_MINUTE", 20)
+    rate_limit_window_seconds: int = _env_int("RATE_LIMIT_WINDOW_SECONDS", 60)
+    stream_poll_interval_seconds: int = _env_int("STREAM_POLL_INTERVAL_SECONDS", 5)
+    alert_webhook_urls: tuple[str, ...] = _env_csv("ALERT_WEBHOOK_URLS")
+    alert_webhook_timeout_seconds: float = _env_float("ALERT_WEBHOOK_TIMEOUT_SECONDS", 5.0)
 
     @property
     def normalized_environment(self) -> str:
@@ -132,6 +142,8 @@ def validate_runtime_settings(settings: Settings, *, service_name: str) -> None:
             raise ValueError(f"{service_name} startup blocked: SESSION_SECRET must be at least 32 characters.")
         if not settings.session_cookie_secure:
             raise ValueError(f"{service_name} startup blocked: SESSION_COOKIE_SECURE must be true outside development.")
+        if not settings.csrf_origin_enforcement:
+            raise ValueError(f"{service_name} startup blocked: CSRF_ORIGIN_ENFORCEMENT must stay enabled outside development.")
 
     paper_key, paper_secret = settings.paper_broker_credentials()
     live_key, live_secret = settings.live_broker_credentials()
@@ -149,6 +161,17 @@ def validate_runtime_settings(settings: Settings, *, service_name: str) -> None:
             raise ValueError(
                 f"{service_name} startup blocked: paper and live broker credentials must be separate when live trading is enabled.",
             )
+
+    if settings.request_body_max_bytes <= 0:
+        raise ValueError(f"{service_name} startup blocked: REQUEST_BODY_MAX_BYTES must be positive.")
+    if settings.api_rate_limit_per_minute <= 0:
+        raise ValueError(f"{service_name} startup blocked: API_RATE_LIMIT_PER_MINUTE must be positive.")
+    if settings.auth_rate_limit_per_minute <= 0:
+        raise ValueError(f"{service_name} startup blocked: AUTH_RATE_LIMIT_PER_MINUTE must be positive.")
+    if settings.rate_limit_window_seconds <= 0:
+        raise ValueError(f"{service_name} startup blocked: RATE_LIMIT_WINDOW_SECONDS must be positive.")
+    if settings.stream_poll_interval_seconds <= 0:
+        raise ValueError(f"{service_name} startup blocked: STREAM_POLL_INTERVAL_SECONDS must be positive.")
 
 
 @lru_cache(maxsize=1)

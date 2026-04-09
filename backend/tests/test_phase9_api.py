@@ -49,13 +49,16 @@ def api_client(monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, N
     get_settings.cache_clear()
 
 
-def _login(client: TestClient) -> None:
+def _login(client: TestClient) -> str:
     response = client.post(
         "/auth/login",
         json={"email": "phase9-admin@example.com", "password": "phase9-secret"},
     )
     assert response.status_code == 200
-    assert response.json()["authenticated"] is True
+    payload = response.json()
+    assert payload["authenticated"] is True
+    assert isinstance(payload["csrf_token"], str)
+    return str(payload["csrf_token"])
 
 
 def test_phase9_health_endpoint_propagates_request_id(api_client: TestClient) -> None:
@@ -85,7 +88,7 @@ def test_phase9_auth_session_and_observability_endpoints(api_client: TestClient)
     unauthenticated = api_client.get("/performance/summary")
     assert unauthenticated.status_code == 401
 
-    _login(api_client)
+    csrf_token = _login(api_client)
 
     who_am_i = api_client.get("/auth/me")
     assert who_am_i.status_code == 200
@@ -102,7 +105,7 @@ def test_phase9_auth_session_and_observability_endpoints(api_client: TestClient)
     assert alerts.status_code == 200
     assert isinstance(alerts.json(), list)
 
-    logout = api_client.post("/auth/logout")
+    logout = api_client.post("/auth/logout", headers={"x-csrf-token": csrf_token})
     assert logout.status_code == 200
     assert logout.json()["authenticated"] is False
 

@@ -23,14 +23,13 @@ For this repo, production-hardened means:
 The current repo is still a scaffold. It has API, worker, dashboard, risk checks, and a narrow broker path, but it does not yet have:
 
 - infrastructure as code
-- full production-grade auth hardening such as CSRF protection, rate limiting, and external secret rotation
-- secrets rotation
-- full order lifecycle tracking
-- broker reconciliation
-- reliable deploy and rollback flow
-- persistent observability pipeline
-- disaster recovery procedures
-- production change management
+- externally managed secret rotation
+- reliable hosted deploy and rollback flow
+- an externalized observability pipeline
+- rehearsed disaster recovery on managed services
+- host-enforced production change management
+
+Repo-local control-plane hardening, release-governance docs, incident playbooks, and disaster-recovery runbooks now exist in the repository. The remaining gaps are primarily hosted-platform and operational-enforcement work.
 
 ## Production Readiness Exit Criteria
 
@@ -339,16 +338,16 @@ Before enabling real live trading, confirm:
 
 ## Immediate Next 10 Hardening Tasks
 
-1. Add Alembic migrations and remove startup `create_all`.
-2. Introduce a broker capability registry and execution support matrix.
-3. Split decisioning from execution into separate worker paths.
-4. Build a real order state model with transition history.
-5. Add broker reconciliation and drift-triggered live halt.
-6. Add market-calendar and session gating.
-7. Add the remaining production auth hardening around the current secure-cookie session model.
-8. Add structured logs, metrics, and critical alerts.
-9. Create staging and paper-soak deployment workflow.
-10. Write incident runbooks for broker outage, stale data, and runaway execution.
+1. Add infrastructure as code for the `web`, `api`, `worker`, and managed dependency split.
+2. Externalize session/provider secrets and enforce hosted-edge controls around the current secure-cookie session model.
+3. Externalize logs, metrics, traces, and alert routing to managed operators-on-call tooling.
+4. Define a versioned deploy, migration-review, and rollback workflow across staging and production.
+5. Separate staging, paper, shadow-live, and guarded-live environments with explicit secrets and broker accounts.
+6. Add broker event-stream ingestion or tighter state-sync loops for faster order-state convergence.
+7. Rehearse the incident runbooks for broker outage, stale data, malformed model output, and runaway execution.
+8. Add backup and restore drills plus cold-start recovery procedures tied to reconciliation safety checks.
+9. Enable branch protection and reviewer approval requirements for strategy, risk, execution, and prompt changes.
+10. Add rollout controls and feature flags for model, risk-policy, and execution-policy changes.
 
 ## Final Standard
 

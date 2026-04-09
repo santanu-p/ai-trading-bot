@@ -29,7 +29,7 @@ It is not a social trading product, a copy-trading marketplace, or a generalized
 
 The API owns:
 
-- login/auth token issuance
+- login/session issuance
 - bot status changes
 - trading mode changes
 - kill-switch changes
@@ -69,12 +69,12 @@ The worker owns:
 The dashboard owns:
 
 - operator login UI
-- polling for current backend state
+- polling plus SSE subscription for current backend state
 - control actions for start/stop/mode/kill switch/live-enable
 - intent approval and rejection workflow
 - reconciliation, order lifecycle, flatten-all, and broker-kill actions
 - settings editing
-- operational visibility for trades, decisions, and failures
+- operational visibility for trades, decisions, failures, review queues, prompt attribution, and open risk budget
 
 ## Data Ownership
 

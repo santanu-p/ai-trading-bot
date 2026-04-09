@@ -20,7 +20,7 @@ The dashboard is an operator console rather than a marketing site or analyst wor
 
 ## First-Run Intake
 
-Before the bot can be started, the operator now has to complete an agent-intake flow. The UI asks for:
+Before the bot can be started, an admin now has to complete an agent-intake flow. The UI asks for:
 
 - trading pattern
 - instrument class
@@ -43,7 +43,7 @@ Roles:
 - `operator`: bot controls and intent approvals
 - `admin`: settings changes, live enablement, and forced logout
 
-### Polling
+### Polling And Streaming
 
 The dashboard polls the backend every 30 seconds for:
 
@@ -54,9 +54,18 @@ The dashboard polls the backend every 30 seconds for:
 - orders
 - positions
 - risk events
+- alerts
+- performance summary
+- execution-quality samples
+- execution-quality summary
+- reconciliation mismatches
 - audit logs
 - operator sessions
 - backtest report summaries
+- trade reviews
+- trade review summaries
+
+It also keeps an SSE connection open to `/stream/operations` for near-real-time updates on alerts, fills, transitions, unresolved mismatch counts, queued trade reviews, and a slim performance snapshot.
 
 ### Actions
 
@@ -79,7 +88,9 @@ The settings route adds:
 - live enable/disable controls
 - broker kill
 - session review and admin revocation
-- full bot settings editing for admins
+- editing for the currently surfaced watchlist and primary guardrails
+
+Some backend settings remain API-only today, including portions of the portfolio concentration, dynamic sizing, cooldown, and anomaly-threshold surface.
 
 ### Data Views
 
@@ -91,17 +102,18 @@ Overview displays:
 - broker capability coverage
 - current positions
 - committee feed
-- decision-time feature/event/timestamp context from scan payloads
 - audit log
 - run history
+
+The backend persists richer feature/event/timestamp context on runs and decisions, but the current dashboard mostly surfaces high-level summaries rather than the full payload.
 
 Backtests displays:
 
 - research backtest launch form
 - persisted report history
-- report metrics (return/drawdown/sharpe/win rate/expectancy/turnover/exposure)
+- report metrics (return/drawdown/sharpe/expectancy/turnover/exposure)
 - walk-forward window summary
-- regime-level performance breakdown
+- regime-level performance breakdown, including win-rate detail
 
 Risk displays risk events, reconciliation mismatches, and audit history.
 Risk events now include explicit data-quality rejection codes when stale or incomplete feeds block symbols.
@@ -111,6 +123,11 @@ Risk now also includes a Phase 8 observability surface:
 
 - an operational alerts panel sourced from `alert_*` backend events
 - a performance snapshot panel with recent rejection pressure, malformed-output counts, scan-failure counts, portfolio position/exposure metrics, latest equity signals, and top latency/counter metrics
+- an open-risk-budget visualization derived from saved limits versus current portfolio state
+- prompt-version attribution rows from grouped trade-review summaries
+- a rendered trade-review queue for queued and completed post-trade reviews
+
+Decisions now also surface committee disagreement summaries, specialist vote rollups, committee notes, and prompt-version lineage.
 
 Settings displays editable fields for all configurable guardrails and the watchlist plus live safety controls and session management.
 
@@ -123,6 +140,6 @@ Settings displays editable fields for all configurable guardrails and the watchl
 
 ## Current Limitations
 
-- No websocket streaming.
+- The operator surface uses backend SSE, but it is still snapshot-driven rather than direct broker-native websocket ingestion.
 - No optimistic state reconciliation.
 - Frontend type-check/build validation was not run in this task because local Node dependencies were intentionally not installed.

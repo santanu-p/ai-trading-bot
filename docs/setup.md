@@ -1,8 +1,13 @@
 # Setup And Local Runbook
 
-## Constraint
+## Notes
 
-This repository was created without installing dependencies locally. The steps below are documentation for the future setup phase, not steps that were executed during implementation.
+- Backend requires Python 3.12 or newer.
+- Web validation in CI uses Node 22.
+- Use `.env.example` as the starting point, then adjust values for your environment.
+- For Docker Compose or Codespaces/devcontainers, use service-host URLs inside `.env`:
+  - `DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/tradingbot`
+  - `REDIS_URL=redis://redis:6379/0`
 
 ## Suggested Local Setup
 
@@ -11,7 +16,7 @@ This repository was created without installing dependencies locally. The steps b
 1. Create a Python virtual environment.
 2. Install the backend package from `backend/`.
 3. Copy `.env.example` to `.env`.
-4. Set Alpaca and OpenAI credentials.
+4. Set session/admin credentials, provider keys, and `NEXT_PUBLIC_API_BASE_URL` when the web app is not served from the same local origin as the API.
 5. Start Postgres and Redis.
 6. Run the FastAPI app.
 7. Run the Celery worker with beat enabled.
@@ -23,8 +28,6 @@ This repository was created without installing dependencies locally. The steps b
 3. Start the Next.js app.
 
 ## Suggested Local Commands
-
-These were not run during this task.
 
 ### Backend
 
@@ -56,7 +59,7 @@ npm run type-check
 
 ```bash
 cd backend
-celery -A tradingbot.worker.celery_app.celery_app worker -B --loglevel=INFO
+celery -A tradingbot.worker.celery_app:celery_app worker -B --loglevel=INFO
 ```
 
 ### Web
@@ -73,6 +76,8 @@ npm run dev
 docker compose up --build
 ```
 
+The checked-in Compose file runs `alembic upgrade head` before starting the API and worker services, and it overrides `DATABASE_URL`/`REDIS_URL` to use the Compose service names.
+
 ### GitHub Codespaces
 
 The repo now includes a `.devcontainer/` setup for Codespaces.
@@ -81,11 +86,14 @@ After opening the repo in a Codespace:
 
 1. Wait for `postCreateCommand` to finish installing backend and web dependencies.
 2. Update `.env` with at least:
+   - `DATABASE_URL=postgresql+psycopg://postgres:postgres@postgres:5432/tradingbot`
+   - `REDIS_URL=redis://redis:6379/0`
    - `SESSION_SECRET`
    - `ADMIN_PASSWORD`
    - `OPENAI_API_KEY` or `GEMINI_API_KEY`
-   - `ALPACA_API_KEY`
-   - `ALPACA_API_SECRET`
+   - `ALPACA_PAPER_API_KEY` and `ALPACA_PAPER_API_SECRET` or the legacy fallback pair `ALPACA_API_KEY` and `ALPACA_API_SECRET`
+   - `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_API_SECRET` if `ALLOW_LIVE_TRADING=true`
+   - `NEXT_PUBLIC_API_BASE_URL`
    - `ALLOW_LIVE_TRADING`
 3. Start the API:
 
@@ -98,7 +106,7 @@ uvicorn tradingbot.api.main:app --reload --host 0.0.0.0 --port 8000
 
 ```bash
 cd backend
-celery -A tradingbot.worker.celery_app.celery_app worker -B --loglevel=INFO
+celery -A tradingbot.worker.celery_app:celery_app worker -B --loglevel=INFO
 ```
 
 5. Start the web app:
@@ -115,7 +123,7 @@ The Codespace devcontainer already starts Postgres and Redis as sidecar services
 - configure admin credentials
 - configure session secret
 - configure Alpaca paper credentials
-- configure OpenAI API key
+- configure an OpenAI or Gemini API key
 - run `alembic upgrade head`
 - open the dashboard
 - log in as admin

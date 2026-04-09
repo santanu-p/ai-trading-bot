@@ -11,7 +11,7 @@ from tradingbot.config import get_settings
 from tradingbot.enums import OperatorRole
 from tradingbot.models import AuditLog, OperatorSession
 from tradingbot.schemas.auth import LoginRequest, LoginResponse, SessionResponse
-from tradingbot.security import create_access_token
+from tradingbot.security import create_access_token, create_csrf_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -31,9 +31,30 @@ def _set_session_cookie(response: Response, token: str, expires_at: datetime) ->
     )
 
 
+def _set_csrf_cookie(response: Response, token: str, expires_at: datetime) -> None:
+    settings = get_settings()
+    max_age = max(int((expires_at - datetime.now(UTC)).total_seconds()), 0)
+    response.set_cookie(
+        settings.csrf_cookie_name,
+        token,
+        max_age=max_age,
+        expires=expires_at,
+        httponly=False,
+        secure=settings.session_cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    response.headers[settings.csrf_header_name] = token
+
+
 def _clear_session_cookie(response: Response) -> None:
     settings = get_settings()
     response.delete_cookie(settings.session_cookie_name, path="/", samesite="lax")
+
+
+def _clear_csrf_cookie(response: Response) -> None:
+    settings = get_settings()
+    response.delete_cookie(settings.csrf_cookie_name, path="/", samesite="lax")
 
 
 @router.post("/login", response_model=LoginResponse)
@@ -69,18 +90,30 @@ def login(
     )
     session.commit()
     token = create_access_token(user.email, role=user.role.value, session_id=session_row.id, expires_at=expires_at)
+    csrf_token = create_csrf_token(session_row.id, expires_at=expires_at)
     _set_session_cookie(response, token, expires_at)
-    return LoginResponse(authenticated=True, email=user.email, role=user.role, expires_at=expires_at, session_id=session_row.id)
+    _set_csrf_cookie(response, csrf_token, expires_at)
+    return LoginResponse(
+        authenticated=True,
+        email=user.email,
+        role=user.role,
+        expires_at=expires_at,
+        session_id=session_row.id,
+        csrf_token=csrf_token,
+    )
 
 
 @router.get("/me", response_model=LoginResponse)
-def who_am_i(current: CurrentActor = Depends(get_current_operator)) -> LoginResponse:
+def who_am_i(response: Response, current: CurrentActor = Depends(get_current_operator)) -> LoginResponse:
+    csrf_token = create_csrf_token(current.session_id, expires_at=current.expires_at)
+    _set_csrf_cookie(response, csrf_token, current.expires_at)
     return LoginResponse(
         authenticated=True,
         email=current.email,
         role=current.role,
         expires_at=current.expires_at,
         session_id=current.session_id,
+        csrf_token=csrf_token,
     )
 
 
@@ -104,12 +137,14 @@ def logout(
         )
         session.commit()
     _clear_session_cookie(response)
+    _clear_csrf_cookie(response)
     return LoginResponse(
         authenticated=False,
         email=current.email,
         role=current.role,
         expires_at=current.expires_at,
         session_id=current.session_id,
+        csrf_token=None,
     )
 
 

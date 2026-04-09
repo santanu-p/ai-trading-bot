@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from tradingbot.enums import RunStatus
 from tradingbot.models import AgentRun, AuditLog, BotSettings, RiskEvent, TradeCandidate
+from tradingbot.services.alert_dispatch import dispatch_alert_webhooks
 from tradingbot.services.metrics import observe_counter
 
 
@@ -191,6 +192,15 @@ class AlertService:
             )
         )
         observe_counter("alerts.emitted", tags={"code": code, "severity": severity})
+        dispatch_alert_webhooks(
+            {
+                "code": code,
+                "severity": severity,
+                "message": message,
+                "payload": payload,
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        )
         return True
 
 

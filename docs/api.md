@@ -2,9 +2,16 @@
 
 ## Auth Model
 
-- All routes except `/auth/login` and `/health` require a secure HTTP-only session cookie.
+- All routes except `/auth/login`, `/health`, `/health/live`, and `/health/ready` require a secure HTTP-only session cookie.
 - The backend supports `reviewer`, `operator`, and `admin` roles.
 - Session state is persisted in `operator_sessions`, can expire, and can be revoked by an admin.
+- Authenticated mutating routes also require the CSRF token in the `x-csrf-token` header.
+
+## Control-Plane Safeguards
+
+- Sliding-window rate limiting is enforced for login and general API traffic.
+- Non-safe requests are rejected when the request body exceeds the configured maximum size.
+- Authenticated responses expose the active CSRF token in `x-csrf-token` so the dashboard can keep the cookie/header pair synchronized.
 
 ## Authentication
 
@@ -29,7 +36,8 @@ Response:
   "email": "admin@example.com",
   "role": "admin",
   "expires_at": "2026-04-08T12:00:00Z",
-  "session_id": "uuid"
+  "session_id": "uuid",
+  "csrf_token": "signed-token"
 }
 ```
 
@@ -78,6 +86,8 @@ Returns `503` with a degraded check map if a dependency is unavailable.
 ## Observability Headers
 
 - API responses now include `x-request-id`.
+- Authenticated responses also include `x-csrf-token`.
+- Rate-limited responses include `Retry-After`, and non-stream responses expose `x-rate-limit-remaining` when applicable.
 - Clients may also provide `x-request-id` on inbound requests to preserve upstream correlation IDs.
 
 ## Settings
@@ -109,11 +119,13 @@ Admin-only update for:
 - broker metadata
 - strategy intake fields
 
+The backend accepts a broader settings payload than the current dashboard form exposes. Today, advanced guardrails such as some portfolio caps, sizing controls, and cooldown/anomaly thresholds are more completely accessible through direct API updates than through the UI.
+
 ## Bot Control
 
 ### `POST /bot/start`
 
-Operator/admin endpoint. Starts the worker loop after intake and execution-scope checks.
+Operator/admin endpoint. Starts the worker loop after intake and execution-scope checks. In the current product surface, intake completion is an admin-managed prerequisite because settings writes are admin-only.
 
 ### `POST /bot/stop`
 
@@ -276,6 +288,15 @@ Response includes:
 - latest equity/buying-power/daily-PnL values from the most recent portfolio snapshot
 - counter metrics with tag dimensions
 - latency metrics with average, p95, max, and sample count
+
+### `GET /stream/operations`
+
+Server-sent event stream for the operator dashboard.
+
+Events:
+
+- `operations.snapshot` with recent alerts, fills, transitions, mismatch counts, queued review counts, and a slim performance snapshot
+- `heartbeat` when no snapshot fields changed during the poll window
 
 ## Execution Quality And TCA
 

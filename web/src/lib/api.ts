@@ -20,6 +20,8 @@ import type {
   ReconciliationMismatchResponse,
   RiskEventResponse,
   SessionResponse,
+  TradeReviewResponse,
+  TradeReviewSummaryResponse,
   OrderStatus,
   PerformanceSummaryResponse,
   TimeInForce,
@@ -27,6 +29,7 @@ import type {
 } from "@/lib/contracts";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+let csrfToken: string | null = null;
 
 type JsonBody = object | undefined;
 
@@ -46,6 +49,9 @@ async function request<T>(path: string, init?: RequestInit & { json?: JsonBody }
   if (init?.json !== undefined) {
     headers.set("Content-Type", "application/json");
   }
+  if (init?.method && !["GET", "HEAD", "OPTIONS"].includes(init.method.toUpperCase()) && csrfToken) {
+    headers.set("X-CSRF-Token", csrfToken);
+  }
 
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
@@ -53,6 +59,10 @@ async function request<T>(path: string, init?: RequestInit & { json?: JsonBody }
     credentials: "include",
     body: init?.json !== undefined ? JSON.stringify(init.json) : init?.body
   });
+  const nextCsrfToken = response.headers.get("x-csrf-token");
+  if (nextCsrfToken) {
+    csrfToken = nextCsrfToken;
+  }
 
   const contentType = response.headers.get("content-type") ?? "";
   const payload = contentType.includes("application/json") ? await response.json() : await response.text();
@@ -71,18 +81,24 @@ async function request<T>(path: string, init?: RequestInit & { json?: JsonBody }
 }
 
 export async function login(email: string, password: string) {
-  return request<LoginResponse>("/auth/login", {
+  const response = await request<LoginResponse>("/auth/login", {
     method: "POST",
     json: { email, password }
   });
+  csrfToken = response.csrf_token ?? csrfToken;
+  return response;
 }
 
 export async function getCurrentSession() {
-  return request<LoginResponse>("/auth/me");
+  const response = await request<LoginResponse>("/auth/me");
+  csrfToken = response.csrf_token ?? csrfToken;
+  return response;
 }
 
 export async function logout() {
-  return request<LoginResponse>("/auth/logout", { method: "POST" });
+  const response = await request<LoginResponse>("/auth/logout", { method: "POST" });
+  csrfToken = response.csrf_token ?? null;
+  return response;
 }
 
 export async function listSessions(email?: string) {
@@ -220,6 +236,18 @@ export async function listAuditLogs(limit = 20) {
   return request<AuditLogResponse[]>(`/audit-logs?limit=${String(limit)}`);
 }
 
+export async function listTradeReviews(status?: string, limit = 20) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) {
+    params.set("status", status);
+  }
+  return request<TradeReviewResponse[]>(`/trade-reviews?${params.toString()}`);
+}
+
+export async function summarizeTradeReviews(limit = 50) {
+  return request<TradeReviewSummaryResponse[]>(`/trade-reviews/summary?limit=${String(limit)}`);
+}
+
 export async function listReconciliationMismatches() {
   return request<ReconciliationMismatchResponse[]>("/reconciliation/mismatches?limit=50");
 }
@@ -279,4 +307,21 @@ export async function enableLiveExecution(approvalCode: string) {
 
 export async function disableLiveExecution() {
   return request<BotSettingsResponse>("/bot/live/disable", { method: "POST" });
+}
+
+export function openOperationsStream(
+  onSnapshot: (payload: Record<string, unknown>) => void,
+  onStatus?: (status: "open" | "error" | "closed") => void
+) {
+  const stream = new EventSource(`${API_BASE_URL}/stream/operations`, { withCredentials: true });
+  stream.addEventListener("operations.snapshot", (event) => {
+    const message = event as MessageEvent<string>;
+    onSnapshot(JSON.parse(message.data) as Record<string, unknown>);
+  });
+  stream.onopen = () => onStatus?.("open");
+  stream.onerror = () => onStatus?.("error");
+  return () => {
+    onStatus?.("closed");
+    stream.close();
+  };
 }

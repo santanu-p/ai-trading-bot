@@ -20,6 +20,14 @@ Status note as of 2026-04-08:
 - Phase 9 testing and release-discipline items are now implemented in the current repo.
 - The remaining sections below describe the next upgrade path after Phase 9.
 
+Additional repo-local status note as of 2026-04-09:
+
+- control-plane CSRF protection, request-size limits, and sliding-window rate limiting are now in the repo
+- alert webhook dispatch and dashboard-facing SSE operations streaming are now in the repo
+- the dashboard now renders open risk budget, trade-review queues, prompt attribution, and committee disagreement summaries
+- release-governance docs, a PR evidence template, and a release-guard workflow are now in the repo
+- the main remaining gaps after these additions are hosted branch-protection enforcement, broader replay failure injection, release rollout controls across environments, multi-market broker expansion, and direct broker-native streaming
+
 ## Critical Scope Decision
 
 The repo now asks the operator to choose patterns such as intraday, delivery, futures, and options, but the current execution layer is still Alpaca-oriented and cash-equity only.
@@ -55,6 +63,7 @@ Current repo reality after Phases 0-9:
 - Broker/profile capability gating is explicit, and unsupported selections are analysis-only by design.
 - Execution remains intentionally focused on the currently supported US cash-equity workflow; futures/options are not yet executable in this repo.
 - The largest remaining gaps are multi-market broker expansion, advanced operator analytics depth, realtime event streaming, and production hardening controls.
+- Repo-local operator analytics depth and backend event-stream transport have improved, but direct broker-native streaming and hosted production controls still remain.
 
 ## Priority Order
 
@@ -890,11 +899,11 @@ Minimum bar:
 
 If the goal is maximum improvement for the next development cycle, do these first:
 
-1. Enforce branch-protection requirements on all CI gates and add mandatory reviewer sign-off for strategy/risk changes.
+1. Enable GitHub branch protection so `CI` and `Release Guard` are required and reviewer approval is enforced at the host level.
 2. Expand replay fixtures across more symbols/regimes and add failure-injection scenarios for broker/provider instability.
-3. Add release-level controls for strategy/risk threshold rollout and rollback auditability.
-4. Deepen the operator surface with committee disagreement drill-downs, open risk budget visuals, and richer prompt-version performance attribution.
-5. Add websocket/event-stream transport so operators can consume alerts, fills, and risk-state transitions in near real time.
+3. Add release-level controls for strategy/risk threshold rollout and rollback auditability across staged environments.
+4. Expand multi-market broker coverage beyond executable US cash equities.
+5. Add direct broker-native streaming or tighter sub-second state convergence beyond the current backend SSE layer.
 
 ## Definition Of "Expert" For This Repo
 

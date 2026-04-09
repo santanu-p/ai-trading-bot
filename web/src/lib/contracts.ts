@@ -174,6 +174,7 @@ export interface LoginResponse {
   role: OperatorRole;
   expires_at: string;
   session_id: string;
+  csrf_token?: string | null;
 }
 
 export interface SessionResponse {
@@ -201,7 +202,26 @@ export interface CommitteeDecision {
   reject_reason?: string | null;
   market_vote?: string | null;
   news_vote?: string | null;
+  chair_vote?: string | null;
   risk_notes: string[];
+  committee_notes: string[];
+  agent_signals: Array<{
+    role: string;
+    symbol: string;
+    direction: OrderIntent;
+    confidence: number;
+    thesis: string;
+    entry: number;
+    stop_loss: number;
+    take_profit: number;
+    time_horizon: string;
+    vote: string;
+    reject_reason?: string | null;
+    supporting_facts: string[];
+    risk_flags: string[];
+  }>;
+  model_name?: string | null;
+  prompt_versions: Record<string, string>;
 }
 
 export interface RunResponse {
@@ -493,4 +513,33 @@ export interface BacktestDetailResponse extends BacktestSummaryResponse {
   equity_curve: Record<string, unknown>[];
   symbol_breakdown: Record<string, unknown>[];
   trades: BacktestTradeResponse[];
+}
+
+export interface TradeReviewResponse {
+  id: number;
+  source_run_id?: string | null;
+  order_id: number;
+  symbol: string;
+  status: string;
+  model_name?: string | null;
+  prompt_versions: Record<string, string>;
+  review_score: number;
+  pnl: number;
+  return_pct: number;
+  loss_cause?: string | null;
+  summary: string;
+  recurring_pattern_key?: string | null;
+  review_payload: Record<string, unknown>;
+  reviewed_at?: string | null;
+  created_at: string;
+}
+
+export interface TradeReviewSummaryResponse {
+  model_name: string;
+  prompt_signature: string;
+  reviewed_trades: number;
+  queued_reviews: number;
+  avg_score: number;
+  avg_return_pct: number;
+  loss_causes: Record<string, number>;
 }

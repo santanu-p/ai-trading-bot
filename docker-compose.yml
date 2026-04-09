@@ -20,9 +20,12 @@ services:
   api:
     build:
       context: ./backend
-    command: uvicorn tradingbot.api.main:app --host 0.0.0.0 --port 8000
+    command: /bin/sh -c "alembic upgrade head && uvicorn tradingbot.api.main:app --host 0.0.0.0 --port 8000"
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/tradingbot
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
@@ -32,9 +35,12 @@ services:
   worker:
     build:
       context: ./backend
-    command: celery -A tradingbot.worker.celery_app.celery_app worker -B --loglevel=INFO
+    command: /bin/sh -c "alembic upgrade head && celery -A tradingbot.worker.celery_app:celery_app worker -B --loglevel=INFO"
     env_file:
       - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/tradingbot
+      REDIS_URL: redis://redis:6379/0
     depends_on:
       - postgres
       - redis
@@ -51,4 +57,3 @@ services:
 
 volumes:
   pgdata:
-

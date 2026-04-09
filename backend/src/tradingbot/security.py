@@ -88,6 +88,18 @@ def create_access_token(subject: str, *, role: str = "admin", session_id: str | 
     return _sign_payload(payload)
 
 
+def create_csrf_token(session_id: str, *, expires_at: datetime | None = None) -> str:
+    settings = get_settings()
+    expiration = expires_at or (datetime.now(UTC) + timedelta(minutes=settings.session_expire_minutes))
+    return _sign_payload(
+        {
+            "kind": "csrf",
+            "sid": session_id,
+            "exp": int(expiration.timestamp()),
+        }
+    )
+
+
 def decode_access_token(token: str) -> str | None:
     payload = _decode_payload(token)
     if not payload:
@@ -98,3 +110,12 @@ def decode_access_token(token: str) -> str | None:
 
 def decode_signed_session(token: str) -> dict[str, Any] | None:
     return _decode_payload(token)
+
+
+def verify_csrf_token(token: str, *, session_id: str) -> bool:
+    payload = _decode_payload(token)
+    if not payload:
+        return False
+    kind = payload.get("kind")
+    token_session_id = payload.get("sid")
+    return kind == "csrf" and token_session_id == session_id

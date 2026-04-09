@@ -74,6 +74,7 @@ Responsibilities:
 - post-submit execution/TCA analytics and symbol-quality feedback
 - structured observability context (request/run IDs), JSON logging, and in-process metric aggregation
 - operational alert synthesis from failure/rejection/reconciliation pressure signals
+- best-effort alert webhook dispatch
 - settings persistence
 - research backtest simulation (slippage, commission, delayed fills, rejects)
 - walk-forward and regime scoring
@@ -196,7 +197,7 @@ Recent symbol-level quality is summarized into feedback signals that can block w
 2. Worker and execution tasks emit counters and latency distributions for scan/reconciliation/intent/backtest boundaries.
 3. Alpaca adapter and LLM clients emit external-call latency and success/error counters.
 4. Alert synthesis evaluates runtime windows and emits persisted `alert_*` events for worker instability, reconciliation stress, kill-switch activation, and rejection/malformed spikes.
-5. Operators consume these signals via `/performance/summary` and `/alerts`, and the dashboard risk view surfaces them.
+5. Operators consume these signals via `/performance/summary`, `/alerts`, and `/stream/operations`, and alert payloads can also be forwarded to configured webhooks.
 
 ## Storage Model
 
@@ -218,6 +219,7 @@ Current ORM models cover:
 - `portfolio_snapshots`
 - `symbol_cooldowns`
 - `execution_quality_samples`
+- `trade_reviews`
 - `audit_logs`
 - `backtest_reports`
 - `backtest_trades`
@@ -226,7 +228,7 @@ Schema evolution is versioned with Alembic under `backend/alembic/`.
 
 ## Current Limitations
 
-- No websocket/event streaming
+- Backend SSE is available for operator state changes, but direct broker-native websocket ingestion is still not wired
 - Sector/correlation concentration currently uses heuristic buckets rather than a full factor model
 - Frontend build/type validation was not run in this task because local Node dependencies were intentionally not installed
-- The current auth/session layer is stronger than the original scaffold, but still needs production extras such as CSRF hardening, rate limiting, and managed secret rotation
+- The current auth/session layer now includes CSRF protection and rate limits, but production secret rotation and managed edge controls still remain external

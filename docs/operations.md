@@ -48,10 +48,17 @@ Use the kill switch when:
 
 Before shipping strategy, prompt, risk-threshold, or execution-logic changes:
 
-1. Run backend lint/type/unit/replay checks.
+See [setup.md](setup.md) for the exact local commands and [release-governance.md](release-governance.md) for the PR evidence requirements.
+
+1. Run backend lint/type/unit/replay checks and the web type-check.
 2. Run schema drift verification.
 3. Record a release entry in [strategy-change-log.md](strategy-change-log.md) with replay evidence and rollback notes.
-4. Require reviewer sign-off for the release entry.
+4. Record explicit approver sign-off in the release entry and name the independent reviewer in the PR release-control section.
+
+## Incident References
+
+- [incident-playbooks.md](incident-playbooks.md)
+- [disaster-recovery.md](disaster-recovery.md)
 
 ## Before Any Live Use
 
@@ -61,10 +68,11 @@ Before shipping strategy, prompt, risk-threshold, or execution-logic changes:
 - verify market-hours gating
 - verify cooldown logic
 - verify dashboard state matches broker state
-- add stronger auth/session handling
+- confirm hosted secret handling, HTTPS, and alert-routing integrations are in place
 
 ## Current Operational Gaps
 
 - no externalized metrics/trace sink (telemetry is currently in-process only)
-- no centralized alert-routing integration (pager/on-call/webhook)
-- no websocket event stream from the broker into the dashboard
+- webhook alert delivery is generic only; managed pager/on-call routing is still external
+- the dashboard has a backend SSE stream, but broker-native event ingestion is still not wired
+- backup/PITR, restore drills, and queue-loss expectations still depend on hosted platform configuration

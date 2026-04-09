@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, startTransition, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { type FormEvent, startTransition, useDeferredValue, useEffect, useEffectEvent, useMemo, useState } from "react";
 
 import {
   ApiError,
@@ -19,6 +19,7 @@ import {
   listExecutionQualitySummary,
   getSettings,
   listAlerts,
+  listTradeReviews,
   launchBacktest,
   listAuditLogs,
   listBacktests,
@@ -33,6 +34,7 @@ import {
   listRuns,
   listSessions,
   login,
+  openOperationsStream,
   logout,
   prepareLiveEnablement,
   rejectExecutionIntent,
@@ -41,6 +43,7 @@ import {
   startBot,
   stopBot,
   switchMode,
+  summarizeTradeReviews,
   toggleKillSwitch,
   updateSettings
 } from "@/lib/api";
@@ -67,6 +70,8 @@ import type {
   ReconciliationMismatchResponse,
   RiskEventResponse,
   SessionResponse,
+  TradeReviewResponse,
+  TradeReviewSummaryResponse,
   RunResponse,
   TradingProfile
 } from "@/lib/contracts";
@@ -121,6 +126,8 @@ interface ExecutionQualityFilters {
   sampleStatus: ExecutionSampleStatusFilter;
   sampleLimit: number;
 }
+
+type StreamState = "idle" | "open" | "error";
 
 function defaultExecutionQualityFilters(): ExecutionQualityFilters {
   return {
@@ -251,6 +258,63 @@ function renderProfileScope(profile: TradingProfile | null | undefined) {
   );
 }
 
+function summarizeDecisionDisagreement(decision: CommitteeDecision) {
+  const approvalVotes = decision.agent_signals.filter((signal) =>
+    ["approve", "buy", "long"].includes(signal.vote.trim().toLowerCase())
+  ).length;
+  const dissentingRoles = decision.agent_signals
+    .filter((signal) => !["approve", "buy", "long"].includes(signal.vote.trim().toLowerCase()))
+    .map((signal) => signal.role);
+  return {
+    approvalVotes,
+    totalVotes: decision.agent_signals.length,
+    disagreementCount: dissentingRoles.length,
+    dissentingRoles
+  };
+}
+
+function buildRiskBudgetRows(settingsData: BotSettingsResponse | null, performanceSummary: PerformanceSummaryResponse | null) {
+  if (!settingsData || !performanceSummary) {
+    return [];
+  }
+
+  const equity = Math.max(performanceSummary.latest_equity, 0);
+  const grossLimit = equity > 0 ? equity * settingsData.max_gross_exposure_pct : 0;
+  const symbolLimit = equity > 0 ? equity * settingsData.max_symbol_notional_pct : 0;
+  const dailyLossLimit = equity > 0 ? equity * settingsData.max_daily_loss_pct : 0;
+  const dailyLossUsed = performanceSummary.latest_daily_pl < 0 ? Math.abs(performanceSummary.latest_daily_pl) : 0;
+
+  return [
+    {
+      label: "Open positions",
+      used: performanceSummary.portfolio_position_count,
+      limit: settingsData.max_open_positions,
+      suffix: `${performanceSummary.portfolio_position_count}/${settingsData.max_open_positions}`
+    },
+    {
+      label: "Gross exposure",
+      used: performanceSummary.portfolio_gross_exposure,
+      limit: grossLimit,
+      suffix: `${currency(performanceSummary.portfolio_gross_exposure)} / ${currency(grossLimit)}`
+    },
+    {
+      label: "Largest position",
+      used: performanceSummary.portfolio_largest_position_notional,
+      limit: symbolLimit,
+      suffix: `${currency(performanceSummary.portfolio_largest_position_notional)} / ${currency(symbolLimit)}`
+    },
+    {
+      label: "Daily drawdown",
+      used: dailyLossUsed,
+      limit: dailyLossLimit,
+      suffix: `${currency(dailyLossUsed)} / ${currency(dailyLossLimit)}`
+    }
+  ].map((item) => ({
+    ...item,
+    utilization: item.limit > 0 ? Math.min(item.used / item.limit, 1.5) : 0
+  }));
+}
+
 export function DashboardScreen({ section }: Props) {
   const [operator, setOperator] = useState<LoginResponse | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
@@ -282,9 +346,13 @@ export function DashboardScreen({ section }: Props) {
   const [mismatches, setMismatches] = useState<ReconciliationMismatchResponse[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLogResponse[]>([]);
   const [sessions, setSessions] = useState<SessionResponse[]>([]);
+  const [tradeReviews, setTradeReviews] = useState<TradeReviewResponse[]>([]);
+  const [tradeReviewSummary, setTradeReviewSummary] = useState<TradeReviewSummaryResponse[]>([]);
   const [backtests, setBacktests] = useState<BacktestSummaryResponse[]>([]);
   const [selectedBacktestId, setSelectedBacktestId] = useState<string | null>(null);
   const [selectedBacktest, setSelectedBacktest] = useState<BacktestDetailResponse | null>(null);
+  const [streamState, setStreamState] = useState<StreamState>("idle");
+  const [lastStreamEventAt, setLastStreamEventAt] = useState<string | null>(null);
   const [backtestDraft, setBacktestDraft] = useState<BacktestDraft>(() => {
     const end = new Date();
     const start = new Date(end.getTime() - 5 * 24 * 60 * 60 * 1000);
@@ -331,11 +399,15 @@ export function DashboardScreen({ section }: Props) {
     setMismatches([]);
     setAuditLogs([]);
     setSessions([]);
+    setTradeReviews([]);
+    setTradeReviewSummary([]);
     setBacktests([]);
     setSelectedBacktestId(null);
     setSelectedBacktest(null);
     setLiveApproval(null);
     setLiveApprovalCode("");
+    setStreamState("idle");
+    setLastStreamEventAt(null);
   }
 
   function describeError(error: unknown) {
@@ -414,6 +486,8 @@ export function DashboardScreen({ section }: Props) {
       mismatchesResponse,
       auditResponse,
       sessionResponse,
+      tradeReviewsResponse,
+      tradeReviewSummaryResponse,
       backtestsResponse
     ] = await Promise.all([
       getSettings(),
@@ -434,6 +508,8 @@ export function DashboardScreen({ section }: Props) {
       listReconciliationMismatches(),
       listAuditLogs(24),
       listSessions(),
+      listTradeReviews(undefined, 12),
+      summarizeTradeReviews(12),
       listBacktests(undefined, 24)
     ]);
 
@@ -452,6 +528,8 @@ export function DashboardScreen({ section }: Props) {
     setMismatches(mismatchesResponse);
     setAuditLogs(auditResponse);
     setSessions(sessionResponse);
+    setTradeReviews(tradeReviewsResponse);
+    setTradeReviewSummary(tradeReviewSummaryResponse);
     setBacktests(backtestsResponse);
 
     const nextSelectedOrderId = ordersResponse.some((order) => order.id === selectedOrderId)
@@ -525,6 +603,10 @@ export function DashboardScreen({ section }: Props) {
     () => orders.find((order) => order.id === selectedOrderId) ?? null,
     [orders, selectedOrderId]
   );
+  const riskBudgetRows = useMemo(
+    () => buildRiskBudgetRows(settingsData, performanceSummary),
+    [performanceSummary, settingsData]
+  );
 
   const executionSummaryKeyLabel = executionSummaryDimensionLabels[executionFilters.summaryDimension];
 
@@ -555,6 +637,28 @@ export function DashboardScreen({ section }: Props) {
       setLoading(false);
     }
   }
+
+  const handleOperationsSnapshot = useEffectEvent((payload: Record<string, unknown>) => {
+    const generatedAt = typeof payload.generated_at === "string" ? payload.generated_at : new Date().toISOString();
+    setLastStreamEventAt(generatedAt);
+    startTransition(() => {
+      void refreshNow();
+    });
+  });
+
+  useEffect(() => {
+    if (!operator) {
+      setStreamState("idle");
+      return;
+    }
+
+    const closeStream = openOperationsStream(handleOperationsSnapshot, (status) => {
+      setStreamState(status === "closed" ? "idle" : status);
+    });
+    return () => {
+      closeStream();
+    };
+  }, [operator, handleOperationsSnapshot]);
 
   function applyExecutionQualityFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -945,6 +1049,10 @@ export function DashboardScreen({ section }: Props) {
               <span>
                 {operator.role} | expires {timestamp(operator.expires_at)}
               </span>
+            </div>
+            <div className={`stream-chip ${streamState === "open" ? "positive" : streamState === "error" ? "warning" : ""}`}>
+              <strong>Realtime {streamState === "open" ? "connected" : streamState === "error" ? "degraded" : "idle"}</strong>
+              <span>Last event {timestamp(lastStreamEventAt)}</span>
             </div>
             <input
               className="filter-input"
@@ -1413,27 +1521,51 @@ export function DashboardScreen({ section }: Props) {
               <p>Combined market/news conviction after risk review.</p>
             </div>
             <div className="decision-list long">
-              {filteredDecisions.map((decision) => (
-                <article className="decision-item" key={`${decision.symbol}-${decision.entry}-${decision.confidence}`}>
-                  <div className="decision-meta">
-                    <strong>{decision.symbol}</strong>
-                    <span>{decision.direction}</span>
-                    <span className={decision.status === "approved" ? "tag-positive" : "tag-negative"}>
-                      {decision.status}
-                    </span>
-                  </div>
-                  <p>{decision.thesis}</p>
-                  <div className="decision-values">
-                    <span>Entry {currency(decision.entry)}</span>
-                    <span>Stop {currency(decision.stop_loss)}</span>
-                    <span>Target {currency(decision.take_profit)}</span>
-                    <span>Conf {percent(decision.confidence)}</span>
-                  </div>
-                  {decision.risk_notes.length ? (
-                    <div className="note-row">{decision.risk_notes.join(" | ")}</div>
-                  ) : null}
-                </article>
-              ))}
+              {filteredDecisions.map((decision) => {
+                const disagreement = summarizeDecisionDisagreement(decision);
+                return (
+                  <article className="decision-item" key={`${decision.symbol}-${decision.entry}-${decision.confidence}`}>
+                    <div className="decision-meta">
+                      <strong>{decision.symbol}</strong>
+                      <span>{decision.direction}</span>
+                      <span className={decision.status === "approved" ? "tag-positive" : "tag-negative"}>
+                        {decision.status}
+                      </span>
+                    </div>
+                    <p>{decision.thesis}</p>
+                    <div className="decision-values">
+                      <span>Entry {currency(decision.entry)}</span>
+                      <span>Stop {currency(decision.stop_loss)}</span>
+                      <span>Target {currency(decision.take_profit)}</span>
+                      <span>Conf {percent(decision.confidence)}</span>
+                      <span>
+                        Votes {disagreement.approvalVotes}/{disagreement.totalVotes}
+                      </span>
+                      <span>Dissent {disagreement.disagreementCount}</span>
+                    </div>
+                    {decision.risk_notes.length ? <div className="note-row">{decision.risk_notes.join(" | ")}</div> : null}
+                    {decision.agent_signals.length ? (
+                      <div className="note-row">
+                        Agents:{" "}
+                        {decision.agent_signals
+                          .map((signal) => `${signal.role}:${signal.vote}:${percent(signal.confidence)}`)
+                          .join(" | ")}
+                      </div>
+                    ) : null}
+                    {decision.committee_notes.length ? (
+                      <div className="note-row">Committee: {decision.committee_notes.join(" | ")}</div>
+                    ) : null}
+                    {Object.keys(decision.prompt_versions).length ? (
+                      <div className="note-row">
+                        Prompt versions:{" "}
+                        {Object.entries(decision.prompt_versions)
+                          .map(([role, version]) => `${role}:${version}`)
+                          .join(" | ")}
+                      </div>
+                    ) : null}
+                  </article>
+                );
+              })}
             </div>
           </section>
         ) : null}
@@ -1549,6 +1681,30 @@ export function DashboardScreen({ section }: Props) {
                   </div>
                 ))}
                 {alerts.length === 0 ? <p className="muted">No active operational alerts.</p> : null}
+              </div>
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Open risk budget</h3>
+                <p>Current utilization versus the saved position, exposure, and drawdown caps.</p>
+              </div>
+              <div className="budget-list">
+                {riskBudgetRows.map((item) => (
+                  <article className="budget-row" key={item.label}>
+                    <div className="budget-meta">
+                      <strong>{item.label}</strong>
+                      <span>{item.suffix}</span>
+                    </div>
+                    <div className="budget-bar">
+                      <div
+                        className={`budget-fill ${item.utilization >= 1 ? "warning" : ""}`}
+                        style={{ width: `${Math.min(item.utilization * 100, 100)}%` }}
+                      />
+                    </div>
+                  </article>
+                ))}
+                {riskBudgetRows.length === 0 ? <p className="muted">Risk budget data is unavailable.</p> : null}
               </div>
             </section>
 
@@ -1784,6 +1940,62 @@ export function DashboardScreen({ section }: Props) {
                 </tbody>
               </table>
               {executionQualitySamples.length === 0 ? <p className="muted">No execution samples yet.</p> : null}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Prompt performance attribution</h3>
+                <p>Grouped post-trade review outcomes by model and prompt signature.</p>
+              </div>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Model</th>
+                    <th>Prompt signature</th>
+                    <th>Reviewed</th>
+                    <th>Queued</th>
+                    <th>Avg score</th>
+                    <th>Avg return</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tradeReviewSummary.map((item) => (
+                    <tr key={`${item.model_name}-${item.prompt_signature}`}>
+                      <td>{item.model_name}</td>
+                      <td>{item.prompt_signature}</td>
+                      <td>{item.reviewed_trades}</td>
+                      <td>{item.queued_reviews}</td>
+                      <td>{item.avg_score.toFixed(3)}</td>
+                      <td>{item.avg_return_pct.toFixed(2)}%</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {tradeReviewSummary.length === 0 ? <p className="muted">No prompt attribution rows yet.</p> : null}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Review queue</h3>
+                <p>Queued and completed post-trade reviews for recurring failure analysis.</p>
+              </div>
+              <div className="stack-list">
+                {tradeReviews.map((review) => (
+                  <div className="risk-item" key={review.id}>
+                    <div>
+                      <strong>
+                        {review.symbol} | {review.status}
+                      </strong>
+                      <p>{review.summary}</p>
+                    </div>
+                    <div className="risk-meta">
+                      <span>{review.loss_cause ?? "validated_thesis"}</span>
+                      <span>{timestamp(review.created_at)}</span>
+                    </div>
+                  </div>
+                ))}
+                {tradeReviews.length === 0 ? <p className="muted">No trade reviews queued.</p> : null}
+              </div>
             </section>
 
             <section className="panel">

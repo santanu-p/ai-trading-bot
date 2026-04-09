@@ -7,7 +7,7 @@ A greenfield multi-agent intraday trading bot scaffold for Alpaca equities with:
 - `contracts/`: shared JSON schema for committee decisions
 - `docs/`: architecture, API, setup, and deployment documentation
 
-No dependencies were installed and no services were started while creating this repository.
+Local, Docker Compose, and Codespaces runbooks live in [docs/setup.md](./docs/setup.md).
 
 ## What This Repo Implements
 
@@ -55,6 +55,12 @@ No dependencies were installed and no services were started while creating this 
   - replay-regression worker task for deterministic fixture-backed release checks
   - CI workflow gates for lint, type checks, unit tests, replay regression tests, and schema drift checks
   - strategy change release notes with replay evidence and rollback guidance
+- post-Phase-9 control-plane and operator upgrades with:
+  - CSRF protection, request-size limits, and sliding-window rate limiting for cookie-authenticated control-plane routes
+  - alert webhook dispatch hooks for external operator tooling
+  - backend SSE operations stream for near-real-time alert/fill/risk-state updates
+  - dashboard review-queue, prompt-attribution, disagreement, and open-risk-budget panels
+  - release-governance docs, PR evidence template, and release-guard workflow
 - Multi-agent committee shape:
   - structured specialist committee
   - deterministic risk engine
@@ -78,7 +84,7 @@ No dependencies were installed and no services were started while creating this 
 - Install or pin local Python/Node environments on your machine
 - Start API, worker, Postgres, Redis, or the web app
 - Prove live trading behavior end-to-end against Alpaca
-- Add full production secret management, rate limiting, CSRF protection, or cloud provisioning code
+- Add full production secret management, hosted observability sinks, or cloud provisioning code
 
 ## Repo Layout
 
@@ -99,7 +105,7 @@ No dependencies were installed and no services were started while creating this 
 ## Runtime Model
 
 - API: `uvicorn tradingbot.api.main:app`
-- Worker: `celery -A tradingbot.worker.celery_app.celery_app worker -B`
+- Worker: `celery -A tradingbot.worker.celery_app:celery_app worker -B`
 - Web: `next dev` or `next start`
 - Local orchestration target: `docker-compose.yml`
 - GitHub Codespaces target: `.devcontainer/`
@@ -119,8 +125,9 @@ No dependencies were installed and no services were started while creating this 
 11. Operators review live intents when required, and the execution worker re-checks market hours, kill switch, broker connectivity, and live gates before broker submission.
 12. Filled/canceled/rejected outcomes feed persisted TCA analytics and symbol-level execution quality feedback.
 13. Filled exits generate post-trade reviews tied back to model/prompt lineage and update outcome-aware symbol cooldown state.
-14. The dashboard and API poll/read settings, intents, runs, orders, sessions, audit logs, risk state, review queues, and execution-quality analytics.
-15. Structured observability pipelines produce request/worker telemetry and operational alerts that are surfaced to operators.
+14. The dashboard polls the broader control-plane surface and also keeps an SSE operations stream open for alerts, fills, transitions, mismatch counts, and risk-state updates.
+15. Trade reviews, prompt-version attribution, open risk budget, and committee disagreement summaries are rendered directly in the dashboard risk and decisions views.
+16. Structured observability pipelines produce request/worker telemetry and operational alerts that are surfaced to operators and can be forwarded to configured webhooks.
 
 ## Documentation
 
@@ -132,18 +139,20 @@ No dependencies were installed and no services were started while creating this 
 - [Setup and local runbook](./docs/setup.md)
 - [Deployment notes](./docs/deployment.md)
 - [Operations runbook](./docs/operations.md)
+- [Release governance](./docs/release-governance.md)
+- [Incident playbooks](./docs/incident-playbooks.md)
+- [Disaster recovery](./docs/disaster-recovery.md)
 - [Expert upgrade roadmap](./docs/expert-upgrade-roadmap.md)
 - [Strategy change log](./docs/strategy-change-log.md)
 - [Production hardening plan](./docs/production-hardening-plan.md)
 
 ## Verification Performed
 
-- `pytest backend/tests -q` completed successfully in the current environment with `PYTHONPATH=backend/src`
-- No dependency installation was performed
-- No services were started
-- Frontend type-check/build validation was not executed because local Node dependencies were intentionally not installed
+- Backend Python source touched in this pass was syntax-checked in memory without writing bytecode
+- No local services were started as part of this verification pass
+- Full backend pytest and frontend type-check/build validation were not run in this pass because local dependencies were intentionally not installed here
 
 ## Notes
 
 - Some transient Python cache artifacts may exist from parse attempts that were blocked by the Windows sandbox; they are ignored by `.gitignore`.
-- The current repository now includes Phase 0-9 roadmap work, but it is still not a production-hardened trading system.
+- The current repository now includes Phase 0-9 roadmap work plus post-Phase-9 control-plane and operator hardening, but it is still not a production-hardened trading system.

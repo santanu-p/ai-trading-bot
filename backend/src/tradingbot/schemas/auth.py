@@ -30,3 +30,4 @@ class LoginResponse(BaseModel):
     role: OperatorRole
     expires_at: datetime
     session_id: str
+    csrf_token: str | None = None
