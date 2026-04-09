@@ -94,12 +94,13 @@ def launch_backtest(
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> BacktestResponse:
-    if not payload.symbols:
-        raise HTTPException(status_code=400, detail="At least one symbol is required.")
+    normalized_symbols = [item.strip().upper() for item in payload.symbols if item.strip()]
+    if not normalized_symbols:
+        raise HTTPException(status_code=400, detail="At least one non-empty symbol is required.")
 
     report = BacktestReport(
         status="queued",
-        symbols=[item.strip().upper() for item in payload.symbols if item.strip()],
+        symbols=normalized_symbols,
         start_at=payload.start,
         end_at=payload.end,
         interval_minutes=payload.interval_minutes,

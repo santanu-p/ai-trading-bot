@@ -506,7 +506,7 @@ class AlpacaExecutionAdapter(AlpacaRESTMixin):
                     side=str(item.get("side") or "buy"),
                     quantity=int(abs(_to_float(item.get("qty"), fallback=0))),
                     price=_to_float(item.get("price")),
-                    fee=_to_float(item.get("net_amount"), fallback=0.0),
+                    fee=_to_float(item.get("fee"), fallback=0.0),
                     filled_at=_to_datetime(item.get("transaction_time")) or datetime.now(UTC),
                     raw=item,
                 )

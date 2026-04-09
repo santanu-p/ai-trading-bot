@@ -111,3 +111,20 @@ def test_phase9_auth_session_and_observability_endpoints(api_client: TestClient)
 
     post_logout = api_client.get("/auth/me")
     assert post_logout.status_code == 401
+
+
+def test_phase9_backtest_rejects_blank_symbols(api_client: TestClient) -> None:
+    csrf_token = _login(api_client)
+
+    response = api_client.post(
+        "/backtests",
+        headers={"x-csrf-token": csrf_token},
+        json={
+            "symbols": ["   "],
+            "start": "2026-01-01T14:30:00Z",
+            "end": "2026-01-01T16:00:00Z",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "At least one non-empty symbol is required."

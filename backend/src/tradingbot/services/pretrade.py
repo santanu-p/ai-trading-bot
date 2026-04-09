@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tradingbot.enums import InstrumentClass
+from tradingbot.enums import InstrumentClass, OrderStatus
 from tradingbot.models import OrderRecord
 from tradingbot.services.adapters import AccountSnapshot, OrderRequest
 from tradingbot.services.contracts import ContractMasterService
@@ -89,7 +89,21 @@ class PreTradeValidator:
         if existing_margin_usage + required_margin > account.equity * 2:
             reasons.append("Margin usage would exceed exchange-account limits.")
 
-        open_order_count = self.session.scalar(select(func.count()).select_from(OrderRecord)) or 0
+        open_order_count = self.session.scalar(
+            select(func.count())
+            .select_from(OrderRecord)
+            .where(
+                OrderRecord.status.notin_(
+                    (
+                        OrderStatus.FILLED,
+                        OrderStatus.CANCELED,
+                        OrderStatus.EXPIRED,
+                        OrderStatus.REPLACED,
+                        OrderStatus.REJECTED,
+                    )
+                )
+            )
+        ) or 0
         if open_order_count >= max_open_orders:
             reasons.append("Exchange order cap reached for this account session.")
 

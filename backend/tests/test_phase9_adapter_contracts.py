@@ -4,9 +4,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tradingbot.config import Settings
 from tradingbot.enums import BrokerSlug, InstrumentClass, OrderStatus, OrderType, TradingMode
 from tradingbot.models import BotSettings
 from tradingbot.services.adapters import (
+    AlpacaExecutionAdapter,
     BrokerAPIError,
     ExecutionBrokerRouter,
     RouteRequirements,
@@ -84,3 +86,43 @@ def test_phase9_alpaca_order_payload_maps_to_internal_broker_contract() -> None:
     assert mapped.status == OrderStatus.PARTIALLY_FILLED
     assert mapped.quantity == 10
     assert mapped.filled_quantity == 4
+
+
+def test_phase9_fetch_fills_maps_fee_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "tradingbot.services.adapters.get_settings",
+        lambda: Settings(
+            alpaca_paper_api_key="test-paper-key",
+            alpaca_paper_api_secret="test-paper-secret",
+        ),
+    )
+    adapter = AlpacaExecutionAdapter(TradingMode.PAPER)
+
+    def _fake_request_json(  # type: ignore[no-untyped-def]
+        base_url: str,
+        path: str,
+        *,
+        params=None,
+        method: str = "GET",
+        body=None,
+    ):
+        del base_url, path, params, method, body
+        return [
+            {
+                "id": "fill-1",
+                "order_id": "order-1",
+                "symbol": "AAPL",
+                "side": "buy",
+                "qty": "2",
+                "price": "100.5",
+                "fee": "0.12",
+                "net_amount": "-201.00",
+                "transaction_time": datetime.now(UTC).isoformat(),
+            }
+        ]
+
+    monkeypatch.setattr(adapter, "_request_json", _fake_request_json)
+    fills = adapter.fetch_fills(limit=5)
+
+    assert len(fills) == 1
+    assert fills[0].fee == pytest.approx(0.12)
