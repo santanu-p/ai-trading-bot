@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from tradingbot.db import Base
 from tradingbot.enums import BrokerSlug, InstrumentClass, OrderIntent, OrderStatus, OrderType, RiskDecision, TimeInForce, TradingMode
-from tradingbot.models import BotSettings, ReconciliationMismatch
+from tradingbot.models import BotSettings, OrderRecord, ReconciliationMismatch
 from tradingbot.schemas.trading import CommitteeDecision, RiskCheckResult
 from tradingbot.services.adapters import (
     AccountSnapshot,
@@ -252,6 +252,52 @@ def test_pretrade_validator_rejects_tick_lot_and_capital_violations() -> None:
     assert any("lot size" in reason.lower() for reason in result.reasons)
     assert any("tick size" in reason.lower() for reason in result.reasons)
     assert any("buying power" in reason.lower() for reason in result.reasons)
+
+
+def test_pretrade_validator_ignores_terminal_orders_for_open_order_cap() -> None:
+    session = _session()
+    session.add_all(
+        [
+            OrderRecord(
+                symbol="AAPL",
+                mode=TradingMode.PAPER,
+                direction=OrderIntent.BUY,
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                quantity=1,
+                status=OrderStatus.FILLED,
+                client_order_id="hist-filled-1",
+            ),
+            OrderRecord(
+                symbol="MSFT",
+                mode=TradingMode.PAPER,
+                direction=OrderIntent.BUY,
+                order_type=OrderType.LIMIT,
+                time_in_force=TimeInForce.DAY,
+                quantity=1,
+                status=OrderStatus.CANCELED,
+                client_order_id="hist-canceled-1",
+            ),
+        ]
+    )
+    session.commit()
+
+    validator = PreTradeValidator(session, ContractMasterService(session))
+    result = validator.validate(
+        order=OrderRequest(
+            symbol="AAPL",
+            quantity=1,
+            side=OrderIntent.BUY,
+            order_type=OrderType.LIMIT,
+            limit_price=100.0,
+        ),
+        instrument_class=InstrumentClass.CASH_EQUITY,
+        account=AccountSnapshot(equity=10_000, cash=10_000, buying_power=10_000, daily_pl=0),
+        max_open_orders=1,
+    )
+
+    assert result.accepted is True
+    assert not any("order cap" in reason.lower() for reason in result.reasons)
 
 
 
