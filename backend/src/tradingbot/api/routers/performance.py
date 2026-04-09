@@ -167,7 +167,7 @@ async def stream_operations(
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> StreamingResponse:
-    stream_session_factory = sessionmaker(bind=session.get_bind(), autoflush=False, autocommit=False, future=True)
+    stream_session_factory = sessionmaker(bind=session.get_bind(), autoflush=False, autocommit=False)
 
     async def event_generator():
         with stream_session_factory() as stream_session:
