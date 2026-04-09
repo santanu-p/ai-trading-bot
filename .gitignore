@@ -10,6 +10,7 @@ __pycache__/
 *.pyc.*
 *.pyo
 node_modules/
+*.tsbuildinfo
 dist/
 coverage/
 htmlcov/

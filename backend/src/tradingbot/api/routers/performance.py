@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import asyncio
-import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from tradingbot.api.dependencies import CurrentActor, db_session_dependency, get_current_operator
 from tradingbot.enums import TradingMode
@@ -21,7 +19,6 @@ from tradingbot.schemas.trading import (
     PerformanceSummaryResponse,
     RiskEventResponse,
 )
-from tradingbot.config import get_settings
 from tradingbot.services.alerts import AlertService, settings_alert_snapshot
 from tradingbot.services.metrics import metrics_registry
 from tradingbot.services.portfolio import summarize_portfolio_health
@@ -165,35 +162,19 @@ def _operations_snapshot(session: Session) -> dict[str, object]:
     }
 
 
-def _snapshot_digest(snapshot: dict[str, object]) -> str:
-    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
-
-
 @router.get("/stream/operations")
 async def stream_operations(
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> StreamingResponse:
-    interval_seconds = max(get_settings().stream_poll_interval_seconds, 1)
+    stream_session_factory = sessionmaker(bind=session.get_bind(), autoflush=False, autocommit=False, future=True)
 
     async def event_generator():
-        last_digest = ""
-        try:
-            while True:
-                session.expire_all()
-                snapshot = _operations_snapshot(session)
-                digest = _snapshot_digest(snapshot)
-                if digest != last_digest:
-                    payload = json.dumps(snapshot, separators=(",", ":"), default=str)
-                    yield f"event: operations.snapshot\ndata: {payload}\n\n"
-                    last_digest = digest
-                else:
-                    heartbeat = json.dumps({"generated_at": snapshot["generated_at"]}, separators=(",", ":"))
-                    yield f"event: heartbeat\ndata: {heartbeat}\n\n"
-                await asyncio.sleep(interval_seconds)
-        except asyncio.CancelledError:
-            return
+        with stream_session_factory() as stream_session:
+            stream_session.expire_all()
+            snapshot = _operations_snapshot(stream_session)
+        payload = json.dumps(snapshot, separators=(",", ":"), default=str)
+        yield f"event: operations.snapshot\ndata: {payload}\n\n"
 
     return StreamingResponse(
         event_generator(),
