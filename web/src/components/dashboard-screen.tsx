@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, startTransition, useDeferredValue, useEffect, useEffectEvent, useMemo, useState } from "react";
+import { type FormEvent, startTransition, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -638,13 +638,14 @@ export function DashboardScreen({ section }: Props) {
     }
   }
 
-  const handleOperationsSnapshot = useEffectEvent((payload: Record<string, unknown>) => {
+  const handleOperationsSnapshotRef = useRef<(payload: Record<string, unknown>) => void>(undefined!);
+  handleOperationsSnapshotRef.current = (payload: Record<string, unknown>) => {
     const generatedAt = typeof payload.generated_at === "string" ? payload.generated_at : new Date().toISOString();
     setLastStreamEventAt(generatedAt);
     startTransition(() => {
       void refreshNow();
     });
-  });
+  };
 
   useEffect(() => {
     if (!operator) {
@@ -652,13 +653,13 @@ export function DashboardScreen({ section }: Props) {
       return;
     }
 
-    const closeStream = openOperationsStream(handleOperationsSnapshot, (status) => {
+    const closeStream = openOperationsStream((payload) => handleOperationsSnapshotRef.current(payload), (status) => {
       setStreamState(status === "closed" ? "idle" : status);
     });
     return () => {
       closeStream();
     };
-  }, [operator, handleOperationsSnapshot]);
+  }, [operator]);
 
   function applyExecutionQualityFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -174,7 +174,7 @@ def create_app() -> FastAPI:
                 },
             )
             try:
-                response: Response = await call_next(request)
+                response = await call_next(request)
             except Exception:
                 duration_ms = (perf_counter() - started) * 1000
                 observe_duration_ms(
