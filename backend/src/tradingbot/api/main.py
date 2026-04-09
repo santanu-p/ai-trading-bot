@@ -10,7 +10,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from tradingbot.api.routers import auth, backtests, health, performance, settings, trading
-from tradingbot.config import get_settings
+from tradingbot.config import get_settings, validate_runtime_settings
 from tradingbot.services.metrics import observe_counter, observe_duration_ms
 from tradingbot.services.observability import bind_request_id, configure_structured_logging
 
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 def create_app() -> FastAPI:
     settings_config = get_settings()
+    validate_runtime_settings(settings_config, service_name="api")
     configure_structured_logging()
     app = FastAPI(title=settings_config.app_name, version="0.1.0")
 
@@ -103,4 +104,3 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
-

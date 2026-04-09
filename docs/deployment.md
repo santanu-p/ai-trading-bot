@@ -27,11 +27,13 @@ The original plan assumed a managed backend platform alongside Vercel.
 ## Deployment Concerns
 
 - Do not enable live mode by default.
-- Separate paper and live credentials if you extend the configuration surface later.
+- Configure separate paper and live broker credentials (`ALPACA_PAPER_API_*`, `ALPACA_LIVE_API_*`).
 - Treat `SESSION_SECRET` and provider keys as platform-managed secrets.
 - Ensure the worker and API share the same database and Redis.
 - Run `alembic upgrade head` before starting API or worker revisions.
 - Set the frontend origin and API base URL consistently.
+- For `staging`/`production`, startup validation now blocks boot if `SESSION_SECRET` is default, secure cookies are disabled, or required broker credentials are missing.
+- If `ALLOW_LIVE_TRADING=true`, startup validation requires distinct paper and live credentials.
 
 ## Missing Production Hardening
 
@@ -42,7 +44,6 @@ This scaffold does not yet include:
 - HTTPS/reverse-proxy config
 - rate limiting
 - audit retention policies
-- health/readiness probes beyond `/health`
 - observability stack wiring
 - CSRF hardening for cookie-based auth
 
