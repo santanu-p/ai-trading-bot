@@ -131,11 +131,11 @@ def create_app() -> FastAPI:
                 window_seconds=settings_config.rate_limit_window_seconds,
             )
             if not limit_result.allowed:
-                response = JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Retry later."})
-                response.headers["Retry-After"] = str(limit_result.retry_after_seconds)
-                response.headers["x-request-id"] = request_id
-                response.headers["x-rate-limit-remaining"] = "0"
-                return response
+                error_response = JSONResponse(status_code=429, content={"detail": "Rate limit exceeded. Retry later."})
+                error_response.headers["Retry-After"] = str(limit_result.retry_after_seconds)
+                error_response.headers["x-request-id"] = request_id
+                error_response.headers["x-rate-limit-remaining"] = "0"
+                return error_response
 
         if (
             request.method not in _SAFE_METHODS
@@ -144,9 +144,9 @@ def create_app() -> FastAPI:
             and session_id
         ):
             if settings_config.csrf_origin_enforcement and not _origin_allowed(request, settings_config.web_origin):
-                response = JSONResponse(status_code=403, content={"detail": "Origin check failed."})
-                response.headers["x-request-id"] = request_id
-                return response
+                error_response = JSONResponse(status_code=403, content={"detail": "Origin check failed."})
+                error_response.headers["x-request-id"] = request_id
+                return error_response
 
             csrf_cookie = request.cookies.get(settings_config.csrf_cookie_name)
             csrf_header = request.headers.get(settings_config.csrf_header_name)
@@ -156,9 +156,9 @@ def create_app() -> FastAPI:
                 or not hmac.compare_digest(csrf_cookie, csrf_header)
                 or not verify_csrf_token(csrf_header, session_id=session_id)
             ):
-                response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed."})
-                response.headers["x-request-id"] = request_id
-                return response
+                error_response = JSONResponse(status_code=403, content={"detail": "CSRF validation failed."})
+                error_response.headers["x-request-id"] = request_id
+                return error_response
 
         started = perf_counter()
         with bind_request_id(request_id):

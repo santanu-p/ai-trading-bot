@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { type FormEvent, startTransition, useDeferredValue, useEffect, useEffectEvent, useMemo, useState } from "react";
+import { type FormEvent, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   ApiError,
@@ -638,13 +638,19 @@ export function DashboardScreen({ section }: Props) {
     }
   }
 
-  const handleOperationsSnapshot = useEffectEvent((payload: Record<string, unknown>) => {
+  const refreshNowRef = useRef(refreshNow);
+
+  useEffect(() => {
+    refreshNowRef.current = refreshNow;
+  }, [refreshNow]);
+
+  const handleOperationsSnapshot = useCallback((payload: Record<string, unknown>) => {
     const generatedAt = typeof payload.generated_at === "string" ? payload.generated_at : new Date().toISOString();
     setLastStreamEventAt(generatedAt);
     startTransition(() => {
-      void refreshNow();
+      void refreshNowRef.current();
     });
-  });
+  }, []);
 
   useEffect(() => {
     if (!operator) {
