@@ -1,5 +1,6 @@
 export type TradingMode = "paper" | "live";
 export type BotStatus = "running" | "stopped";
+export type MarketRegion = "US" | "IN";
 export type RiskDecision = "approved" | "rejected";
 export type OrderIntent = "buy" | "sell" | "hold";
 export type OrderType = "market" | "limit" | "stop_market" | "stop_limit" | "bracket" | "oco" | "trailing_stop";
@@ -15,7 +16,7 @@ export type OrderStatus =
   | "replaced"
   | "rejected"
   | "suspended";
-export type BrokerSlug = "alpaca";
+export type BrokerSlug = "alpaca" | "internal_paper";
 export type TradingPattern =
   | "scalping"
   | "intraday"
@@ -94,7 +95,32 @@ export interface MarketSessionResponse {
   next_session_opens_at?: string | null;
 }
 
+export interface MarketProfileSummaryResponse {
+  profile_id: number;
+  profile_key: string;
+  display_name: string;
+  market_region: MarketRegion;
+  execution_provider_kind: string;
+  data_provider_kind: string;
+  enabled: boolean;
+  is_default: boolean;
+  mode: TradingMode;
+  live_enabled: boolean;
+  enabled_exchanges: string[];
+}
+
 export interface BotSettingsResponse {
+  profile_id: number;
+  profile_key: string;
+  display_name: string;
+  market_region: MarketRegion;
+  execution_provider_kind: string;
+  data_provider_kind: string;
+  enabled: boolean;
+  is_default: boolean;
+  enabled_exchanges: string[];
+  benchmark_symbols: string[];
+  news_optional: boolean;
   status: BotStatus;
   mode: TradingMode;
   kill_switch_enabled: boolean;
@@ -138,6 +164,11 @@ export interface BotSettingsResponse {
 }
 
 export interface BotSettingsUpdatePayload {
+  display_name: string;
+  enabled: boolean;
+  enabled_exchanges: string[];
+  benchmark_symbols: string[];
+  news_optional: boolean;
   scan_interval_minutes: number;
   consensus_threshold: number;
   max_open_positions: number;
@@ -226,6 +257,7 @@ export interface CommitteeDecision {
 
 export interface RunResponse {
   id: string;
+  profile_id: number;
   symbol: string;
   status: string;
   started_at?: string | null;
@@ -236,6 +268,7 @@ export interface RunResponse {
 
 export interface ExecutionIntentResponse {
   id: string;
+  profile_id: number;
   source_run_id?: string | null;
   intent_type: ExecutionIntentType;
   mode: TradingMode;
@@ -258,6 +291,7 @@ export interface ExecutionIntentResponse {
 
 export interface OrderResponse {
   id: number;
+  profile_id: number;
   symbol: string;
   mode: TradingMode;
   direction: OrderIntent;
@@ -284,6 +318,7 @@ export interface OrderResponse {
 
 export interface OrderTransitionResponse {
   id: number;
+  profile_id: number;
   order_id: number;
   symbol: string;
   from_status?: OrderStatus | null;
@@ -297,6 +332,7 @@ export interface OrderTransitionResponse {
 
 export interface OrderFillResponse {
   id: number;
+  profile_id: number;
   order_id: number;
   broker_fill_id?: string | null;
   broker_order_id?: string | null;
@@ -311,6 +347,7 @@ export interface OrderFillResponse {
 
 export interface PositionResponse {
   id: number;
+  profile_id: number;
   symbol: string;
   quantity: number;
   average_entry_price: number;
@@ -321,6 +358,7 @@ export interface PositionResponse {
 
 export interface RiskEventResponse {
   id: number;
+  profile_id?: number | null;
   symbol?: string | null;
   severity: string;
   code: string;
@@ -418,6 +456,7 @@ export interface AuditLogResponse {
 
 export interface ReconciliationMismatchResponse {
   id: number;
+  profile_id: number;
   broker_slug: BrokerSlug;
   symbol?: string | null;
   mismatch_type: string;
@@ -431,6 +470,7 @@ export interface ReconciliationMismatchResponse {
 }
 
 export interface LiveEnablePrepareResponse {
+  profile_id: number;
   approval_code: string;
   expires_at: string;
   live_trading_env_allowed: boolean;
@@ -442,6 +482,7 @@ export interface ActionResponse {
 }
 
 export interface BacktestRequestPayload {
+  profile_id: number;
   symbols: string[];
   start: string;
   end: string;
@@ -463,6 +504,7 @@ export interface BacktestResponse {
 
 export interface BacktestSummaryResponse {
   id: string;
+  profile_id: number;
   task_id?: string | null;
   status: string;
   symbols: string[];
@@ -517,6 +559,7 @@ export interface BacktestDetailResponse extends BacktestSummaryResponse {
 
 export interface TradeReviewResponse {
   id: number;
+  profile_id: number;
   source_run_id?: string | null;
   order_id: number;
   symbol: string;

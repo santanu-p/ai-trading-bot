@@ -100,11 +100,13 @@ class ExecutionQualityService:
         session: Session,
         *,
         broker_slug: BrokerSlug,
+        profile_id: int | None,
         default_venue: str | None,
         policy: ExecutionQualityPolicy | None = None,
     ) -> None:
         self.session = session
         self.broker_slug = broker_slug
+        self.profile_id = profile_id
         self.default_venue = (default_venue or "unknown").strip() or "unknown"
         self.policy = policy or ExecutionQualityPolicy()
 
@@ -247,6 +249,7 @@ class ExecutionQualityService:
         row = self.session.scalar(select(ExecutionQualitySample).where(ExecutionQualitySample.order_id == order.id))
         if row is None:
             row = ExecutionQualitySample(
+                profile_id=order.profile_id,
                 order_id=order.id,
                 symbol=order.symbol,
                 broker_slug=broker_slug,
@@ -454,6 +457,8 @@ class ExecutionQualityService:
     def _load_recent_rows(self, *, symbol: str | None) -> list[ExecutionQualitySample]:
         window_start = datetime.now(UTC) - timedelta(hours=max(self.policy.feedback_lookback_hours, 1))
         query = select(ExecutionQualitySample).where(ExecutionQualitySample.created_at >= window_start)
+        if self.profile_id is not None:
+            query = query.where(ExecutionQualitySample.profile_id == self.profile_id)
         if symbol:
             query = query.where(ExecutionQualitySample.symbol == symbol)
         return list(self.session.scalars(query.order_by(ExecutionQualitySample.created_at.desc()).limit(2000)).all())

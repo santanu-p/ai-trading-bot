@@ -12,8 +12,9 @@ from tradingbot.models import AgentRun, ExecutionIntent, OrderRecord, RiskEvent,
 
 
 class TradeReviewService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, profile_id: int | None = None) -> None:
         self.session = session
+        self.profile_id = profile_id
 
     def queue_review_for_exit_order(self, order: OrderRecord) -> TradeReview | None:
         if order.direction != OrderIntent.SELL or order.status != OrderStatus.FILLED:
@@ -55,6 +56,7 @@ class TradeReviewService:
         )
 
         review = TradeReview(
+            profile_id=order.profile_id,
             source_run_id=source_run_id,
             order_id=order.id,
             symbol=order.symbol,
@@ -88,9 +90,10 @@ class TradeReviewService:
         return review
 
     def summarize_model_performance(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        rows = self.session.scalars(
-            select(TradeReview).order_by(TradeReview.created_at.desc()).limit(limit)
-        ).all()
+        query = select(TradeReview).order_by(TradeReview.created_at.desc()).limit(limit)
+        if self.profile_id is not None:
+            query = query.where(TradeReview.profile_id == self.profile_id)
+        rows = self.session.scalars(query).all()
         grouped: dict[tuple[str, str], dict[str, Any]] = {}
         for row in rows:
             model_name = row.model_name or "unknown"
@@ -200,6 +203,7 @@ class TradeReviewService:
         prior_count = self.session.scalar(
             select(func.count())
             .select_from(TradeReview)
+            .where(TradeReview.profile_id == review.profile_id)
             .where(TradeReview.recurring_pattern_key == review.recurring_pattern_key)
             .where(TradeReview.status == "queued")
         )
@@ -207,6 +211,7 @@ class TradeReviewService:
             return
         self.session.add(
             RiskEvent(
+                profile_id=review.profile_id,
                 symbol=review.symbol,
                 severity="warning",
                 code="trade_review_pattern",

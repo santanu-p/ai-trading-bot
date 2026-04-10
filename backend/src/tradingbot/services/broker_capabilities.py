@@ -128,9 +128,85 @@ ALPACA_BROKER = BrokerDefinition(
     ),
 )
 
+INDIA_PAPER_BROKER = BrokerDefinition(
+    slug=BrokerSlug.INTERNAL_PAPER,
+    label="India Multi-Asset Paper",
+    summary=(
+        "Profile-scoped paper trading and backtesting across Indian cash, F&O, and commodity segments "
+        "using imported local market data and a broker-shaped simulator."
+    ),
+    default_account_type="paper",
+    default_venue="India multi-asset",
+    default_timezone="Asia/Kolkata",
+    default_base_currency="INR",
+    default_permissions=("paper", "cash_equities", "futures", "options", "commodities"),
+    supported_modes=frozenset({TradingMode.PAPER}),
+    supported_instruments=frozenset(
+        {
+            InstrumentClass.CASH_EQUITY,
+            InstrumentClass.FUTURES,
+            InstrumentClass.OPTIONS,
+            InstrumentClass.MIXED,
+        }
+    ),
+    supported_patterns=frozenset(
+        {
+            TradingPattern.SCALPING,
+            TradingPattern.INTRADAY,
+            TradingPattern.DELIVERY,
+            TradingPattern.SWING,
+            TradingPattern.POSITIONAL,
+            TradingPattern.BTST_STBT,
+            TradingPattern.FUTURES_DIRECTIONAL,
+            TradingPattern.FUTURES_HEDGED,
+            TradingPattern.OPTIONS_BUYING,
+            TradingPattern.OPTIONS_SELLING,
+        }
+    ),
+    capabilities=(
+        BrokerCapabilityDefinition(
+            key="cash_equities",
+            label="Cash equities",
+            description="Paper execution for NSE/BSE cash equity instruments.",
+            supported=True,
+        ),
+        BrokerCapabilityDefinition(
+            key="futures",
+            label="Futures",
+            description="Paper execution for equity and commodity futures contracts.",
+            supported=True,
+        ),
+        BrokerCapabilityDefinition(
+            key="options",
+            label="Options",
+            description="Paper execution for single-leg equity and commodity options contracts.",
+            supported=True,
+        ),
+        BrokerCapabilityDefinition(
+            key="commodities",
+            label="Commodities",
+            description="Commodity derivatives routed through the India paper simulator.",
+            supported=True,
+        ),
+        BrokerCapabilityDefinition(
+            key="paper_mode",
+            label="Paper mode",
+            description="Exchange-aware paper mode backed by imported local files.",
+            supported=True,
+        ),
+        BrokerCapabilityDefinition(
+            key="live_mode",
+            label="Live mode",
+            description="Live trading is intentionally unavailable until a real India broker is chosen.",
+            supported=False,
+        ),
+    ),
+)
+
 
 BROKER_DEFINITIONS: dict[BrokerSlug, BrokerDefinition] = {
     BrokerSlug.ALPACA: ALPACA_BROKER,
+    BrokerSlug.INTERNAL_PAPER: INDIA_PAPER_BROKER,
 }
 
 

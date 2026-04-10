@@ -11,6 +11,10 @@ Local, Docker Compose, and Codespaces runbooks live in [docs/setup.md](./docs/se
 
 ## What This Repo Implements
 
+- Multi-profile market control plane with seeded `us-alpaca` and `india-paper` profiles
+- Profile-scoped bot settings, watchlists, scans, execution intents, orders, fills, positions, risk events, and backtests
+- India paper-market support with imported-file market data/news adapters and a broker-shaped internal paper execution adapter
+- Exchange-aware session handling for US and India profiles, including NSE/BSE daytime sessions and commodity-style extended hours
 - Alpaca-based paper/live equities trading workflow with explicit live enablement
 - 5-minute scan worker design for intraday decision cycles
 - first-step agent intake for selecting trading pattern, instrument class, strategy family, risk profile, and market universe
@@ -84,6 +88,7 @@ Local, Docker Compose, and Codespaces runbooks live in [docs/setup.md](./docs/se
 - Install or pin local Python/Node environments on your machine
 - Start API, worker, Postgres, Redis, or the web app
 - Prove live trading behavior end-to-end against Alpaca
+- Provide India live-broker execution; India support is currently research, paper execution, and backtests via imported files
 - Add full production secret management, hosted observability sinks, or cloud provisioning code
 
 ## Repo Layout
@@ -148,9 +153,9 @@ Local, Docker Compose, and Codespaces runbooks live in [docs/setup.md](./docs/se
 
 ## Verification Performed
 
-- Backend Python source touched in this pass was syntax-checked in memory without writing bytecode
+- Full backend pytest suite passed with `PYTHONPATH=src python -m pytest -p no:cacheprovider`
 - No local services were started as part of this verification pass
-- Full backend pytest and frontend type-check/build validation were not run in this pass because local dependencies were intentionally not installed here
+- Frontend type-check/build validation was not run because the workspace does not have web dependencies installed and no local installs were permitted
 
 ## Notes
 

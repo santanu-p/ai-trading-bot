@@ -49,10 +49,13 @@ class ReconciliationService:
         transitions = 0
         fills_ingested = 0
         mismatches_created = 0
-        alerts = AlertService(self.session)
+        alerts = AlertService(self.session, profile_id=self.settings_row.id)
 
         local_orders = self.session.scalars(
-            select(OrderRecord).where(OrderRecord.broker_order_id.is_not(None)).order_by(OrderRecord.id.asc())
+            select(OrderRecord)
+            .where(OrderRecord.profile_id == self.settings_row.id)
+            .where(OrderRecord.broker_order_id.is_not(None))
+            .order_by(OrderRecord.id.asc())
         ).all()
         local_by_broker_id = {order.broker_order_id: order for order in local_orders if order.broker_order_id}
 
@@ -113,7 +116,9 @@ class ReconciliationService:
                 broker_reference=local.broker_order_id,
             )
 
-        last_fill_at = self.session.scalar(select(func.max(OrderFill.filled_at)))
+        last_fill_at = self.session.scalar(
+            select(func.max(OrderFill.filled_at)).where(OrderFill.profile_id == self.settings_row.id)
+        )
         fills = self.adapter.fetch_fills(since=last_fill_at, limit=500)
         for fill in fills:
             if self.execution.ingest_broker_fill(fill, source="reconciliation"):
@@ -122,7 +127,10 @@ class ReconciliationService:
         self.execution.sync_positions_snapshot(self.adapter.list_positions(), source="reconciliation")
 
         unresolved_count = self.session.scalar(
-            select(func.count()).select_from(ReconciliationMismatch).where(ReconciliationMismatch.resolved.is_(False))
+            select(func.count())
+            .select_from(ReconciliationMismatch)
+            .where(ReconciliationMismatch.profile_id == self.settings_row.id)
+            .where(ReconciliationMismatch.resolved.is_(False))
         )
         unresolved_count = int(unresolved_count or 0)
 
@@ -132,6 +140,7 @@ class ReconciliationService:
                 self.settings_row.kill_switch_enabled = True
                 self.session.add(
                     RiskEvent(
+                        profile_id=self.settings_row.id,
                         symbol=None,
                         severity="critical",
                         code="reconciliation_unresolved",
@@ -167,6 +176,7 @@ class ReconciliationService:
     ) -> bool:
         existing = self.session.scalar(
             select(ReconciliationMismatch)
+            .where(ReconciliationMismatch.profile_id == self.settings_row.id)
             .where(ReconciliationMismatch.broker_slug == self.settings_row.broker_slug)
             .where(ReconciliationMismatch.mismatch_type == mismatch_type)
             .where(ReconciliationMismatch.local_reference == local_reference)
@@ -179,6 +189,7 @@ class ReconciliationService:
 
         self.session.add(
             ReconciliationMismatch(
+                profile_id=self.settings_row.id,
                 broker_slug=self.settings_row.broker_slug,
                 symbol=symbol,
                 mismatch_type=mismatch_type,
@@ -200,6 +211,7 @@ class ReconciliationService:
     ) -> None:
         row = self.session.scalar(
             select(ReconciliationMismatch)
+            .where(ReconciliationMismatch.profile_id == self.settings_row.id)
             .where(ReconciliationMismatch.broker_slug == self.settings_row.broker_slug)
             .where(ReconciliationMismatch.mismatch_type == mismatch_type)
             .where(ReconciliationMismatch.local_reference == local_reference)

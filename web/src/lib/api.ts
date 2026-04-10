@@ -13,6 +13,7 @@ import type {
   ExecutionIntentResponse,
   LiveEnablePrepareResponse,
   LoginResponse,
+  MarketProfileSummaryResponse,
   OrderFillResponse,
   OrderResponse,
   OrderTransitionResponse,
@@ -32,6 +33,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 let csrfToken: string | null = null;
 
 type JsonBody = object | undefined;
+type ProfileScoped = { profileId?: number | null };
 
 export class ApiError extends Error {
   status: number;
@@ -80,6 +82,14 @@ async function request<T>(path: string, init?: RequestInit & { json?: JsonBody }
   return payload as T;
 }
 
+function withProfile(path: string, profileId?: number | null) {
+  if (!profileId) {
+    return path;
+  }
+  const joiner = path.includes("?") ? "&" : "?";
+  return `${path}${joiner}profile_id=${String(profileId)}`;
+}
+
 export async function login(email: string, password: string) {
   const response = await request<LoginResponse>("/auth/login", {
     method: "POST",
@@ -114,29 +124,40 @@ export async function revokeSession(sessionId: string) {
   return request<SessionResponse>(`/auth/sessions/${sessionId}/revoke`, { method: "POST" });
 }
 
-export async function getSettings() {
+export async function listProfiles() {
+  return request<MarketProfileSummaryResponse[]>("/profiles");
+}
+
+export async function getSettings(profileId?: number | null) {
+  if (profileId) {
+    return request<BotSettingsResponse>(`/profiles/${profileId}/settings`);
+  }
   return request<BotSettingsResponse>("/settings");
 }
 
-export async function updateSettings(payload: BotSettingsUpdatePayload) {
-  return request<BotSettingsResponse>("/settings", {
+export async function updateSettings(profileId: number | null | undefined, payload: BotSettingsUpdatePayload) {
+  const path = profileId ? `/profiles/${profileId}/settings` : "/settings";
+  return request<BotSettingsResponse>(path, {
     method: "PUT",
     json: payload
   });
 }
 
-export async function listRuns() {
-  return request<RunResponse[]>("/runs?limit=8");
+export async function listRuns({ profileId }: ProfileScoped = {}) {
+  return request<RunResponse[]>(withProfile("/runs?limit=8", profileId));
 }
 
-export async function listDecisions() {
-  return request<CommitteeDecision[]>("/decisions?limit=12");
+export async function listDecisions({ profileId }: ProfileScoped = {}) {
+  return request<CommitteeDecision[]>(withProfile("/decisions?limit=12", profileId));
 }
 
-export async function listExecutionIntents(status?: string, limit = 20) {
+export async function listExecutionIntents(status?: string, limit = 20, profileId?: number | null) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (status) {
     params.set("status", status);
+  }
+  if (profileId) {
+    params.set("profile_id", String(profileId));
   }
   return request<ExecutionIntentResponse[]>(`/execution-intents?${params.toString()}`);
 }
@@ -152,8 +173,8 @@ export async function rejectExecutionIntent(intentId: string, detail: string) {
   });
 }
 
-export async function listOrders() {
-  return request<OrderResponse[]>("/orders?limit=12");
+export async function listOrders({ profileId }: ProfileScoped = {}) {
+  return request<OrderResponse[]>(withProfile("/orders?limit=12", profileId));
 }
 
 export async function listOrderTransitions(orderId: number) {
@@ -181,38 +202,45 @@ export async function cancelOrder(orderId: number) {
   return request<OrderResponse>(`/orders/${orderId}/cancel`, { method: "POST" });
 }
 
-export async function cancelAllOrders() {
-  return request<{ canceled_orders: number; flatten_submitted: number }>("/orders/cancel-all", { method: "POST" });
+export async function cancelAllOrders(profileId?: number | null) {
+  return request<{ canceled_orders: number; flatten_submitted: number }>(withProfile("/orders/cancel-all", profileId), {
+    method: "POST"
+  });
 }
 
-export async function flattenAllPositions() {
-  return request<{ canceled_orders: number; flatten_submitted: number }>("/bot/flatten-all", { method: "POST" });
+export async function flattenAllPositions(profileId?: number | null) {
+  return request<{ canceled_orders: number; flatten_submitted: number }>(withProfile("/bot/flatten-all", profileId), {
+    method: "POST"
+  });
 }
 
-export async function brokerKill() {
-  return request<ActionResponse>("/bot/broker-kill", { method: "POST" });
+export async function brokerKill(profileId?: number | null) {
+  return request<ActionResponse>(withProfile("/bot/broker-kill", profileId), { method: "POST" });
 }
 
-export async function listPositions() {
-  return request<PositionResponse[]>("/positions");
+export async function listPositions({ profileId }: ProfileScoped = {}) {
+  return request<PositionResponse[]>(withProfile("/positions", profileId));
 }
 
-export async function listRiskEvents() {
-  return request<RiskEventResponse[]>("/risk-events?limit=12");
+export async function listRiskEvents({ profileId }: ProfileScoped = {}) {
+  return request<RiskEventResponse[]>(withProfile("/risk-events?limit=12", profileId));
 }
 
-export async function listAlerts(limit = 24) {
-  return request<RiskEventResponse[]>(`/alerts?limit=${String(limit)}`);
+export async function listAlerts(limit = 24, profileId?: number | null) {
+  return request<RiskEventResponse[]>(withProfile(`/alerts?limit=${String(limit)}`, profileId));
 }
 
-export async function getPerformanceSummary(windowMinutes = 60) {
-  return request<PerformanceSummaryResponse>(`/performance/summary?window_minutes=${String(windowMinutes)}`);
+export async function getPerformanceSummary(windowMinutes = 60, profileId?: number | null) {
+  return request<PerformanceSummaryResponse>(
+    withProfile(`/performance/summary?window_minutes=${String(windowMinutes)}`, profileId)
+  );
 }
 
 export async function listExecutionQualitySamples(
   symbol?: string,
   outcomeStatus?: OrderStatus,
-  limit = 20
+  limit = 20,
+  profileId?: number | null
 ) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (symbol) {
@@ -221,55 +249,72 @@ export async function listExecutionQualitySamples(
   if (outcomeStatus) {
     params.set("outcome_status", outcomeStatus);
   }
+  if (profileId) {
+    params.set("profile_id", String(profileId));
+  }
   return request<ExecutionQualitySampleResponse[]>(`/execution-quality/samples?${params.toString()}`);
 }
 
 export async function listExecutionQualitySummary(
   dimension: "symbol" | "venue" | "broker" | "order_type" = "symbol",
-  limit = 10
+  limit = 10,
+  profileId?: number | null
 ) {
   const params = new URLSearchParams({ dimension, limit: String(limit) });
+  if (profileId) {
+    params.set("profile_id", String(profileId));
+  }
   return request<ExecutionQualitySummaryResponse[]>(`/execution-quality/summary?${params.toString()}`);
 }
 
-export async function listAuditLogs(limit = 20) {
-  return request<AuditLogResponse[]>(`/audit-logs?limit=${String(limit)}`);
+export async function listAuditLogs(limit = 20, profileId?: number | null) {
+  return request<AuditLogResponse[]>(withProfile(`/audit-logs?limit=${String(limit)}`, profileId));
 }
 
-export async function listTradeReviews(status?: string, limit = 20) {
+export async function listTradeReviews(status?: string, limit = 20, profileId?: number | null) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (status) {
     params.set("status", status);
   }
+  if (profileId) {
+    params.set("profile_id", String(profileId));
+  }
   return request<TradeReviewResponse[]>(`/trade-reviews?${params.toString()}`);
 }
 
-export async function summarizeTradeReviews(limit = 50) {
-  return request<TradeReviewSummaryResponse[]>(`/trade-reviews/summary?limit=${String(limit)}`);
+export async function summarizeTradeReviews(limit = 50, profileId?: number | null) {
+  return request<TradeReviewSummaryResponse[]>(
+    withProfile(`/trade-reviews/summary?limit=${String(limit)}`, profileId)
+  );
 }
 
-export async function listReconciliationMismatches() {
-  return request<ReconciliationMismatchResponse[]>("/reconciliation/mismatches?limit=50");
+export async function listReconciliationMismatches(profileId?: number | null) {
+  return request<ReconciliationMismatchResponse[]>(
+    withProfile("/reconciliation/mismatches?limit=50", profileId)
+  );
 }
 
-export async function runReconciliation() {
+export async function runReconciliation(profileId?: number | null) {
   return request<{
     transitions_applied: number;
     fills_ingested: number;
     mismatches_created: number;
     unresolved_mismatches: number;
     live_paused: number;
-  }>("/reconciliation/run", { method: "POST" });
+  }>(withProfile("/reconciliation/run", profileId), { method: "POST" });
 }
 
 export async function launchBacktest(payload: BacktestRequestPayload) {
   return request<BacktestResponse>("/backtests", { method: "POST", json: payload });
 }
 
-export async function listBacktests(status?: string, limit = 20) {
+export async function listBacktests(status?: string, limit = 20, profileId?: number | null) {
   const params = new URLSearchParams({ limit: String(limit) });
   if (status) {
     params.set("status", status);
+  }
+  if (profileId) {
+    params.set("profile_id", String(profileId));
   }
   return request<BacktestSummaryResponse[]>(`/backtests?${params.toString()}`);
 }
@@ -278,42 +323,43 @@ export async function getBacktestReport(reportId: string) {
   return request<BacktestDetailResponse>(`/backtests/${reportId}`);
 }
 
-export async function startBot() {
-  return request("/bot/start", { method: "POST" });
+export async function startBot(profileId?: number | null) {
+  return request(withProfile("/bot/start", profileId), { method: "POST" });
 }
 
-export async function stopBot() {
-  return request("/bot/stop", { method: "POST" });
+export async function stopBot(profileId?: number | null) {
+  return request(withProfile("/bot/stop", profileId), { method: "POST" });
 }
 
-export async function switchMode(mode: "paper" | "live") {
-  return request("/bot/mode", { method: "POST", json: { mode } });
+export async function switchMode(mode: "paper" | "live", profileId?: number | null) {
+  return request(withProfile("/bot/mode", profileId), { method: "POST", json: { mode } });
 }
 
-export async function toggleKillSwitch(enabled: boolean) {
-  return request(`/bot/kill-switch?enabled=${String(enabled)}`, { method: "POST" });
+export async function toggleKillSwitch(enabled: boolean, profileId?: number | null) {
+  return request(withProfile(`/bot/kill-switch?enabled=${String(enabled)}`, profileId), { method: "POST" });
 }
 
-export async function prepareLiveEnablement() {
-  return request<LiveEnablePrepareResponse>("/bot/live/prepare", { method: "POST" });
+export async function prepareLiveEnablement(profileId?: number | null) {
+  return request<LiveEnablePrepareResponse>(withProfile("/bot/live/prepare", profileId), { method: "POST" });
 }
 
-export async function enableLiveExecution(approvalCode: string) {
-  return request<BotSettingsResponse>("/bot/live/enable", {
+export async function enableLiveExecution(approvalCode: string, profileId?: number | null) {
+  return request<BotSettingsResponse>(withProfile("/bot/live/enable", profileId), {
     method: "POST",
     json: { approval_code: approvalCode }
   });
 }
 
-export async function disableLiveExecution() {
-  return request<BotSettingsResponse>("/bot/live/disable", { method: "POST" });
+export async function disableLiveExecution(profileId?: number | null) {
+  return request<BotSettingsResponse>(withProfile("/bot/live/disable", profileId), { method: "POST" });
 }
 
 export function openOperationsStream(
   onSnapshot: (payload: Record<string, unknown>) => void,
-  onStatus?: (status: "open" | "error" | "closed") => void
+  onStatus?: (status: "open" | "error" | "closed") => void,
+  profileId?: number | null
 ) {
-  const stream = new EventSource(`${API_BASE_URL}/stream/operations`, { withCredentials: true });
+  const stream = new EventSource(`${API_BASE_URL}${withProfile("/stream/operations", profileId)}`, { withCredentials: true });
   stream.addEventListener("operations.snapshot", (event) => {
     const message = event as MessageEvent<string>;
     onSnapshot(JSON.parse(message.data) as Record<string, unknown>);

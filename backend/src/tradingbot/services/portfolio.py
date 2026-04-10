@@ -19,16 +19,20 @@ class PortfolioHealthSummary:
     latest_daily_pl: float
 
 
-def summarize_portfolio_health(session: Session) -> PortfolioHealthSummary:
-    positions = session.scalars(select(PositionRecord)).all()
+def summarize_portfolio_health(session: Session, *, profile_id: int | None = None) -> PortfolioHealthSummary:
+    positions_query = select(PositionRecord)
+    if profile_id is not None:
+        positions_query = positions_query.where(PositionRecord.profile_id == profile_id)
+    positions = session.scalars(positions_query).all()
 
     gross_exposure = sum(abs(float(item.market_value or 0.0)) for item in positions)
     net_exposure = sum(float(item.market_value or 0.0) for item in positions)
     largest_position = max((abs(float(item.market_value or 0.0)) for item in positions), default=0.0)
 
-    latest_snapshot = session.scalars(
-        select(PortfolioSnapshot).order_by(PortfolioSnapshot.created_at.desc()).limit(1)
-    ).first()
+    snapshot_query = select(PortfolioSnapshot).order_by(PortfolioSnapshot.created_at.desc()).limit(1)
+    if profile_id is not None:
+        snapshot_query = snapshot_query.where(PortfolioSnapshot.profile_id == profile_id)
+    latest_snapshot = session.scalars(snapshot_query).first()
 
     if latest_snapshot is None:
         return PortfolioHealthSummary(

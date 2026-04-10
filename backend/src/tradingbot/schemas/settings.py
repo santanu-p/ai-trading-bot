@@ -8,6 +8,7 @@ from tradingbot.enums import (
     BotStatus,
     BrokerSlug,
     InstrumentClass,
+    MarketRegion,
     MarketUniverse,
     RiskProfile,
     StrategyFamily,
@@ -56,6 +57,17 @@ class MarketSessionResponse(BaseModel):
 
 
 class BotSettingsResponse(BaseModel):
+    profile_id: int
+    profile_key: str
+    display_name: str
+    market_region: MarketRegion
+    execution_provider_kind: str
+    data_provider_kind: str
+    enabled: bool
+    is_default: bool
+    enabled_exchanges: list[str]
+    benchmark_symbols: list[str]
+    news_optional: bool
     status: BotStatus
     mode: TradingMode
     kill_switch_enabled: bool
@@ -99,6 +111,11 @@ class BotSettingsResponse(BaseModel):
 
 
 class BotSettingsUpdate(BaseModel):
+    display_name: str = Field(default="Trading profile", min_length=1, max_length=120)
+    enabled: bool = True
+    enabled_exchanges: list[str] = Field(default_factory=list)
+    benchmark_symbols: list[str] = Field(default_factory=list)
+    news_optional: bool = False
     scan_interval_minutes: int = Field(default=5, ge=1, le=60)
     consensus_threshold: float = Field(default=0.64, ge=0, le=1)
     max_open_positions: int = Field(default=6, ge=1, le=30)
@@ -127,6 +144,20 @@ class BotSettingsUpdate(BaseModel):
     watchlist: list[str] = Field(default_factory=list)
     broker_settings: BrokerSettings = Field(default_factory=BrokerSettings)
     selected_for_analysis: TradingProfile = Field(default_factory=TradingProfile)
+
+
+class MarketProfileSummaryResponse(BaseModel):
+    profile_id: int
+    profile_key: str
+    display_name: str
+    market_region: MarketRegion
+    execution_provider_kind: str
+    data_provider_kind: str
+    enabled: bool
+    is_default: bool
+    mode: TradingMode
+    live_enabled: bool
+    enabled_exchanges: list[str] = Field(default_factory=list)
 
 
 class BotModeUpdate(BaseModel):

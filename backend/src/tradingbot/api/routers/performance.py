@@ -25,59 +25,70 @@ from tradingbot.config import get_settings
 from tradingbot.services.alerts import AlertService, settings_alert_snapshot
 from tradingbot.services.metrics import metrics_registry
 from tradingbot.services.portfolio import summarize_portfolio_health
+from tradingbot.services.store import ensure_bot_settings
 
 router = APIRouter(tags=["performance"])
 
 
 @router.get("/alerts", response_model=list[RiskEventResponse])
 def list_alerts(
+    profile_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=50, ge=1, le=500),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[RiskEventResponse]:
-    rows = AlertService(session).recent_alerts(limit=limit)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
+    rows = AlertService(session, profile_id=settings_row.id).recent_alerts(limit=limit)
     return [RiskEventResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
 @router.get("/performance/summary", response_model=PerformanceSummaryResponse)
 def get_performance_summary(
+    profile_id: int | None = Query(default=None, ge=1),
     window_minutes: int = Query(default=60, ge=5, le=24 * 60),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> PerformanceSummaryResponse:
-    return _build_performance_summary(session, window_minutes=window_minutes)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
+    return _build_performance_summary(session, window_minutes=window_minutes, profile_id=settings_row.id)
 
 
-def _build_performance_summary(session: Session, *, window_minutes: int) -> PerformanceSummaryResponse:
+def _build_performance_summary(session: Session, *, window_minutes: int, profile_id: int) -> PerformanceSummaryResponse:
     counters, latencies = metrics_registry().summarize(window_minutes=window_minutes)
     cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
 
     total_candidates = session.scalar(
-        select(func.count()).select_from(TradeCandidate).where(TradeCandidate.created_at >= cutoff)
+        select(func.count())
+        .select_from(TradeCandidate)
+        .where(TradeCandidate.profile_id == profile_id)
+        .where(TradeCandidate.created_at >= cutoff)
     )
     rejected_candidates = session.scalar(
         select(func.count())
         .select_from(TradeCandidate)
+        .where(TradeCandidate.profile_id == profile_id)
         .where(TradeCandidate.created_at >= cutoff)
         .where(TradeCandidate.status != "approved")
     )
     malformed_events = session.scalar(
         select(func.count())
         .select_from(RiskEvent)
+        .where(RiskEvent.profile_id == profile_id)
         .where(RiskEvent.created_at >= cutoff)
         .where(RiskEvent.code == "agent_output_malformed")
     )
     scan_failures = session.scalar(
         select(func.count())
         .select_from(RiskEvent)
+        .where(RiskEvent.profile_id == profile_id)
         .where(RiskEvent.created_at >= cutoff)
         .where(RiskEvent.code == "scan_failure")
     )
 
     total_count = int(total_candidates or 0)
     rejected_count = int(rejected_candidates or 0)
-    state = settings_alert_snapshot(session)
-    portfolio = summarize_portfolio_health(session)
+    state = settings_alert_snapshot(session, profile_id=profile_id)
+    portfolio = summarize_portfolio_health(session, profile_id=profile_id)
     return PerformanceSummaryResponse(
         window_minutes=window_minutes,
         total_trade_candidates=total_count,
@@ -113,37 +124,49 @@ def _build_performance_summary(session: Session, *, window_minutes: int) -> Perf
     )
 
 
-def _operations_snapshot(session: Session) -> dict[str, object]:
+def _operations_snapshot(session: Session, *, profile_id: int) -> dict[str, object]:
     now = datetime.now(UTC)
     alerts = [
         RiskEventResponse.model_validate(item, from_attributes=True).model_dump(mode="json")
-        for item in AlertService(session).recent_alerts(limit=5)
+        for item in AlertService(session, profile_id=profile_id).recent_alerts(limit=5)
     ]
     fills = [
         OrderFillResponse.model_validate(item, from_attributes=True).model_dump(mode="json")
-        for item in session.scalars(select(OrderFill).order_by(OrderFill.filled_at.desc()).limit(5)).all()
+        for item in session.scalars(
+            select(OrderFill).where(OrderFill.profile_id == profile_id).order_by(OrderFill.filled_at.desc()).limit(5)
+        ).all()
     ]
     transitions = [
         OrderTransitionResponse.model_validate(item, from_attributes=True).model_dump(mode="json")
         for item in session.scalars(
-            select(OrderStateTransition).order_by(OrderStateTransition.transition_at.desc()).limit(5)
+            select(OrderStateTransition)
+            .where(OrderStateTransition.profile_id == profile_id)
+            .order_by(OrderStateTransition.transition_at.desc())
+            .limit(5)
         ).all()
     ]
     unresolved_mismatches = int(
         session.scalar(
             select(func.count())
             .select_from(ReconciliationMismatch)
+            .where(ReconciliationMismatch.profile_id == profile_id)
             .where(ReconciliationMismatch.resolved.is_(False))
         )
         or 0
     )
     queued_reviews = int(
-        session.scalar(select(func.count()).select_from(TradeReview).where(TradeReview.status == "queued")) or 0
+        session.scalar(
+            select(func.count())
+            .select_from(TradeReview)
+            .where(TradeReview.profile_id == profile_id)
+            .where(TradeReview.status == "queued")
+        )
+        or 0
     )
-    summary = _build_performance_summary(session, window_minutes=60)
+    summary = _build_performance_summary(session, window_minutes=60, profile_id=profile_id)
     return {
         "generated_at": now.isoformat(),
-        "state": settings_alert_snapshot(session),
+        "state": settings_alert_snapshot(session, profile_id=profile_id),
         "counts": {
             "alerts": len(alerts),
             "fills": len(fills),
@@ -172,17 +195,19 @@ def _snapshot_digest(snapshot: dict[str, object]) -> str:
 
 @router.get("/stream/operations")
 async def stream_operations(
+    profile_id: int | None = Query(default=None, ge=1),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> StreamingResponse:
     interval_seconds = max(get_settings().stream_poll_interval_seconds, 1)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
 
     async def event_generator():
         last_digest = ""
         try:
             while True:
                 session.expire_all()
-                snapshot = _operations_snapshot(session)
+                snapshot = _operations_snapshot(session, profile_id=settings_row.id)
                 digest = _snapshot_digest(snapshot)
                 if digest != last_digest:
                     payload = json.dumps(snapshot, separators=(",", ":"), default=str)

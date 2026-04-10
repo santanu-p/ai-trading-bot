@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from tradingbot.db import Base
@@ -13,6 +13,7 @@ from tradingbot.enums import (
     ExecutionIntentStatus,
     ExecutionIntentType,
     InstrumentClass,
+    MarketRegion,
     MarketUniverse,
     OperatorRole,
     OptionRight,
@@ -44,7 +45,22 @@ class TimestampMixin:
 class BotSettings(Base, TimestampMixin):
     __tablename__ = "bot_settings"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_key: Mapped[str] = mapped_column(
+        String(60),
+        unique=True,
+        index=True,
+        default=lambda: f"profile-{uuid.uuid4().hex[:12]}",
+    )
+    display_name: Mapped[str] = mapped_column(String(120), default="Default profile")
+    market_region: Mapped[MarketRegion] = mapped_column(Enum(MarketRegion), default=MarketRegion.US)
+    execution_provider_kind: Mapped[str] = mapped_column(String(40), default="alpaca")
+    data_provider_kind: Mapped[str] = mapped_column(String(40), default="alpaca")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled_exchanges: Mapped[list[str]] = mapped_column(JSON, default=list)
+    benchmark_symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
+    news_optional: Mapped[bool] = mapped_column(Boolean, default=False)
     status: Mapped[BotStatus] = mapped_column(Enum(BotStatus), default=BotStatus.STOPPED)
     mode: Mapped[TradingMode] = mapped_column(Enum(TradingMode), default=TradingMode.PAPER)
     kill_switch_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -93,9 +109,11 @@ class BotSettings(Base, TimestampMixin):
 
 class WatchlistSymbol(Base, TimestampMixin):
     __tablename__ = "watchlist_symbols"
+    __table_args__ = (UniqueConstraint("profile_id", "symbol", name="uq_watchlist_profile_symbol"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(12), unique=True, index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -116,7 +134,8 @@ class AgentRun(Base, TimestampMixin):
     __tablename__ = "agent_runs"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    symbol: Mapped[str] = mapped_column(String(12), index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.QUEUED)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -133,8 +152,9 @@ class TradeCandidate(Base, TimestampMixin):
     __tablename__ = "trade_candidates"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     run_id: Mapped[str] = mapped_column(ForeignKey("agent_runs.id"), index=True)
-    symbol: Mapped[str] = mapped_column(String(12), index=True)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     direction: Mapped[OrderIntent] = mapped_column(Enum(OrderIntent))
     confidence: Mapped[float] = mapped_column(Float)
     status: Mapped[str] = mapped_column(String(20))
@@ -152,6 +172,7 @@ class BacktestReport(Base, TimestampMixin):
     __tablename__ = "backtest_reports"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     task_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     symbols: Mapped[list[str]] = mapped_column(JSON, default=list)
@@ -195,8 +216,9 @@ class BacktestTrade(Base):
     __tablename__ = "backtest_trades"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     report_id: Mapped[str] = mapped_column(ForeignKey("backtest_reports.id"), index=True)
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     status: Mapped[str] = mapped_column(String(20), index=True)
     regime: Mapped[str] = mapped_column(String(24), index=True)
     signal_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -220,6 +242,7 @@ class ExecutionIntent(Base, TimestampMixin):
     __tablename__ = "execution_intents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     source_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"), nullable=True, unique=True, index=True)
     intent_type: Mapped[ExecutionIntentType] = mapped_column(Enum(ExecutionIntentType), default=ExecutionIntentType.TRADE)
     mode: Mapped[TradingMode] = mapped_column(Enum(TradingMode))
@@ -228,7 +251,7 @@ class ExecutionIntent(Base, TimestampMixin):
         default=ExecutionIntentStatus.PENDING_APPROVAL,
         index=True,
     )
-    symbol: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    symbol: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
     direction: Mapped[OrderIntent | None] = mapped_column(Enum(OrderIntent), nullable=True)
     quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     limit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -251,8 +274,9 @@ class OrderRecord(Base, TimestampMixin):
     __tablename__ = "orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     execution_intent_id: Mapped[str | None] = mapped_column(ForeignKey("execution_intents.id"), nullable=True, index=True)
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     mode: Mapped[TradingMode] = mapped_column(Enum(TradingMode))
     direction: Mapped[OrderIntent] = mapped_column(Enum(OrderIntent))
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType), default=OrderType.BRACKET)
@@ -292,8 +316,9 @@ class OrderStateTransition(Base):
     __tablename__ = "order_state_transitions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     from_status: Mapped[OrderStatus | None] = mapped_column(Enum(OrderStatus), nullable=True)
     to_status: Mapped[OrderStatus] = mapped_column(Enum(OrderStatus), index=True)
     transition_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
@@ -309,10 +334,11 @@ class OrderFill(Base):
     __tablename__ = "order_fills"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
     broker_fill_id: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True)
     broker_order_id: Mapped[str | None] = mapped_column(String(100), index=True, nullable=True)
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     side: Mapped[str] = mapped_column(String(8))
     quantity: Mapped[int] = mapped_column(Integer)
     price: Mapped[float] = mapped_column(Float)
@@ -325,9 +351,11 @@ class OrderFill(Base):
 
 class PositionRecord(Base, TimestampMixin):
     __tablename__ = "positions"
+    __table_args__ = (UniqueConstraint("profile_id", "symbol", name="uq_positions_profile_symbol"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     quantity: Mapped[int] = mapped_column(Integer)
     average_entry_price: Mapped[float] = mapped_column(Float)
     market_value: Mapped[float] = mapped_column(Float)
@@ -338,12 +366,15 @@ class PositionRecord(Base, TimestampMixin):
 
 class InstrumentContract(Base, TimestampMixin):
     __tablename__ = "instrument_contracts"
+    __table_args__ = (UniqueConstraint("market_region", "symbol", name="uq_contract_market_symbol"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(48), unique=True, index=True)
+    market_region: Mapped[MarketRegion] = mapped_column(Enum(MarketRegion), default=MarketRegion.US, index=True)
+    symbol: Mapped[str] = mapped_column(String(96), index=True)
     instrument_class: Mapped[InstrumentClass] = mapped_column(Enum(InstrumentClass), index=True)
     underlying_symbol: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
     exchange: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
+    segment: Mapped[str] = mapped_column(String(40), default="cash")
     tick_size: Mapped[float] = mapped_column(Float, default=0.01)
     lot_size: Mapped[int] = mapped_column(Integer, default=1)
     contract_multiplier: Mapped[float] = mapped_column(Float, default=1.0)
@@ -354,6 +385,7 @@ class InstrumentContract(Base, TimestampMixin):
     option_chain_available: Mapped[bool] = mapped_column(Boolean, default=False)
     price_band_low: Mapped[float | None] = mapped_column(Float, nullable=True)
     price_band_high: Mapped[float | None] = mapped_column(Float, nullable=True)
+    freeze_quantity: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
@@ -362,8 +394,9 @@ class ReconciliationMismatch(Base, TimestampMixin):
     __tablename__ = "reconciliation_mismatches"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     broker_slug: Mapped[BrokerSlug] = mapped_column(Enum(BrokerSlug), index=True)
-    symbol: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
+    symbol: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
     mismatch_type: Mapped[str] = mapped_column(String(60), index=True)
     severity: Mapped[str] = mapped_column(String(12), default="critical")
     local_reference: Mapped[str | None] = mapped_column(String(120), nullable=True)
@@ -377,7 +410,8 @@ class RiskEvent(Base, TimestampMixin):
     __tablename__ = "risk_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
+    profile_id: Mapped[int | None] = mapped_column(ForeignKey("bot_settings.id"), nullable=True, index=True)
+    symbol: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
     severity: Mapped[str] = mapped_column(String(12), default="warning")
     code: Mapped[str] = mapped_column(String(50), index=True)
     message: Mapped[str] = mapped_column(Text)
@@ -388,6 +422,7 @@ class PortfolioSnapshot(Base, TimestampMixin):
     __tablename__ = "portfolio_snapshots"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     equity: Mapped[float] = mapped_column(Float)
     cash: Mapped[float] = mapped_column(Float)
     buying_power: Mapped[float] = mapped_column(Float)
@@ -398,9 +433,11 @@ class PortfolioSnapshot(Base, TimestampMixin):
 
 class SymbolCooldown(Base, TimestampMixin):
     __tablename__ = "symbol_cooldowns"
+    __table_args__ = (UniqueConstraint("profile_id", "symbol", name="uq_symbol_cooldowns_profile_symbol"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    symbol: Mapped[str] = mapped_column(String(24), unique=True, index=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     cooldown_type: Mapped[str] = mapped_column(String(40), index=True)
     reason: Mapped[str] = mapped_column(Text, default="")
     triggered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
@@ -412,9 +449,10 @@ class TradeReview(Base, TimestampMixin):
     __tablename__ = "trade_reviews"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
     source_run_id: Mapped[str | None] = mapped_column(ForeignKey("agent_runs.id"), nullable=True, index=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True, unique=True)
-    symbol: Mapped[str] = mapped_column(String(24), index=True)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
     status: Mapped[str] = mapped_column(String(20), default="queued", index=True)
     model_name: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     prompt_versions_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -432,8 +470,9 @@ class ExecutionQualitySample(Base, TimestampMixin):
     __tablename__ = "execution_quality_samples"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), nullable=False, index=True, default=1)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), nullable=False, unique=True, index=True)
-    symbol: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    symbol: Mapped[str] = mapped_column(String(48), nullable=False, index=True)
     broker_slug: Mapped[BrokerSlug] = mapped_column(Enum(BrokerSlug), nullable=False, index=True)
     venue: Mapped[str] = mapped_column(String(80), nullable=False, default="unknown", index=True)
     order_type: Mapped[OrderType] = mapped_column(Enum(OrderType), nullable=False, index=True)
@@ -459,6 +498,7 @@ class AuditLog(Base, TimestampMixin):
     __tablename__ = "audit_logs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int | None] = mapped_column(ForeignKey("bot_settings.id"), nullable=True, index=True)
     action: Mapped[str] = mapped_column(String(50), index=True)
     actor: Mapped[str] = mapped_column(String(120), default="system")
     actor_role: Mapped[str] = mapped_column(String(20), default="system")

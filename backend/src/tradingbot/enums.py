@@ -8,8 +8,14 @@ class TradingMode(str, Enum):
     LIVE = "live"
 
 
+class MarketRegion(str, Enum):
+    US = "us"
+    IN = "in"
+
+
 class BrokerSlug(str, Enum):
     ALPACA = "alpaca"
+    INTERNAL_PAPER = "internal_paper"
 
 
 class BotStatus(str, Enum):

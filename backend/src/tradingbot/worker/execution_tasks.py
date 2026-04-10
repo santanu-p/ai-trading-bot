@@ -27,9 +27,12 @@ def execute_intent(intent_id: str) -> dict[str, str]:
     observe_counter("worker.execute_intent.invocations")
     session = get_session_factory()()
     try:
-        settings_row = ensure_bot_settings(session)
-        broker = build_broker_adapter(settings_row)
-        service = ExecutionService(session, broker)
+        intent = session.get(ExecutionIntent, intent_id)
+        if intent is None:
+            raise ValueError(f"Execution intent {intent_id} was not found.")
+        settings_row = ensure_bot_settings(session, profile_id=intent.profile_id)
+        broker = build_broker_adapter(session, settings_row)
+        service = ExecutionService(session, broker, settings_row)
         order = service.execute_intent(intent_id, settings_row=settings_row)
         observe_counter("worker.execute_intent.completed")
         return {"intent_id": intent_id, "status": order.status.value if order else "blocked"}
@@ -48,8 +51,8 @@ def flatten_all_positions(reason: str) -> dict[str, int | str]:
     session = get_session_factory()()
     try:
         settings_row = ensure_bot_settings(session)
-        broker = build_broker_adapter(settings_row)
-        service = ExecutionService(session, broker)
+        broker = build_broker_adapter(session, settings_row)
+        service = ExecutionService(session, broker, settings_row)
         flattened = service.flatten_all_positions(mode=settings_row.mode, reason=reason)
         observe_counter("worker.flatten_all.completed")
         return {"flattened": flattened, "reason": reason}

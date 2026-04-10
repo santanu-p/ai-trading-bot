@@ -302,9 +302,10 @@ class RiskEngine:
 
 
 class PortfolioRiskService:
-    def __init__(self, session: Session, policy: RiskPolicy) -> None:
+    def __init__(self, session: Session, policy: RiskPolicy, *, profile_id: int | None = None) -> None:
         self.session = session
         self.policy = policy
+        self.profile_id = profile_id
 
     def compute_runtime_metrics(
         self,
@@ -326,11 +327,14 @@ class PortfolioRiskService:
 
     def active_cooldown(self, symbol: str, *, as_of: datetime | None = None) -> tuple[bool, list[str]]:
         now = as_of or datetime.now(UTC)
-        row = self.session.scalar(
+        query = (
             select(SymbolCooldown)
             .where(SymbolCooldown.symbol == symbol.upper().strip())
             .where(SymbolCooldown.expires_at > now)
         )
+        if self.profile_id is not None:
+            query = query.where(SymbolCooldown.profile_id == self.profile_id)
+        row = self.session.scalar(query)
         if row is None:
             return False, []
         return True, [
@@ -390,7 +394,10 @@ class PortfolioRiskService:
         now = as_of or datetime.now(UTC)
         expires_at = now + timedelta(minutes=cooldown_minutes)
         symbol_key = symbol.upper().strip()
-        row = self.session.scalar(select(SymbolCooldown).where(SymbolCooldown.symbol == symbol_key))
+        query = select(SymbolCooldown).where(SymbolCooldown.symbol == symbol_key)
+        if self.profile_id is not None:
+            query = query.where(SymbolCooldown.profile_id == self.profile_id)
+        row = self.session.scalar(query)
         context_payload = {
             "pnl": round(pnl, 6),
             "return_pct": round(return_pct, 6),
@@ -399,6 +406,7 @@ class PortfolioRiskService:
         }
         if row is None:
             row = SymbolCooldown(
+                profile_id=self.profile_id,
                 symbol=symbol_key,
                 cooldown_type=cooldown_type,
                 reason=reason,
@@ -430,6 +438,7 @@ class PortfolioRiskService:
         settings_row.live_enabled = False
         self.session.add(
             RiskEvent(
+                profile_id=settings_row.id,
                 symbol=None,
                 severity="critical",
                 code="auto_kill_switch",
@@ -440,7 +449,7 @@ class PortfolioRiskService:
                 },
             )
         )
-        AlertService(self.session).notify_kill_switch(
+        AlertService(self.session, profile_id=settings_row.id).notify_kill_switch(
             source="risk_engine_auto",
             details={
                 "severe_anomalies": runtime.severe_anomaly_count,
@@ -452,16 +461,20 @@ class PortfolioRiskService:
 
     def _equity_drawdown_pct(self, *, current_equity: float, now: datetime) -> float:
         lookback_start = now - timedelta(days=1)
-        peak_equity = self.session.scalar(
-            select(func.max(PortfolioSnapshot.equity)).where(PortfolioSnapshot.created_at >= lookback_start)
-        )
+        query = select(func.max(PortfolioSnapshot.equity)).where(PortfolioSnapshot.created_at >= lookback_start)
+        if self.profile_id is not None:
+            query = query.where(PortfolioSnapshot.profile_id == self.profile_id)
+        peak_equity = self.session.scalar(query)
         if peak_equity is None:
             return 0.0
         peak = max(float(peak_equity), 1e-6)
         return max((peak - max(current_equity, 0.0)) / peak, 0.0)
 
     def _loss_streak(self) -> int:
-        rows = self.session.scalars(select(TradeReview).order_by(TradeReview.created_at.desc()).limit(20)).all()
+        query = select(TradeReview).order_by(TradeReview.created_at.desc()).limit(20)
+        if self.profile_id is not None:
+            query = query.where(TradeReview.profile_id == self.profile_id)
+        rows = self.session.scalars(query).all()
         streak = 0
         for row in rows:
             if row.pnl < 0:
@@ -472,22 +485,28 @@ class PortfolioRiskService:
 
     def _recent_execution_failures(self, *, now: datetime) -> int:
         window_start = now - timedelta(hours=12)
-        count = self.session.scalar(
+        query = (
             select(func.count())
             .select_from(RiskEvent)
             .where(RiskEvent.created_at >= window_start)
             .where(RiskEvent.code.in_(tuple(EXECUTION_FAILURE_CODES)))
         )
+        if self.profile_id is not None:
+            query = query.where(RiskEvent.profile_id == self.profile_id)
+        count = self.session.scalar(query)
         return int(count or 0)
 
     def _recent_severe_anomalies(self, *, now: datetime) -> int:
         window_start = now - timedelta(hours=6)
-        count = self.session.scalar(
+        query = (
             select(func.count())
             .select_from(RiskEvent)
             .where(RiskEvent.created_at >= window_start)
             .where(RiskEvent.severity == "critical")
         )
+        if self.profile_id is not None:
+            query = query.where(RiskEvent.profile_id == self.profile_id)
+        count = self.session.scalar(query)
         return int(count or 0)
 
 

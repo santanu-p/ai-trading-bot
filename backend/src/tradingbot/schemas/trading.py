@@ -75,6 +75,7 @@ class RiskCheckResult(BaseModel):
 
 class RunResponse(BaseModel):
     id: str
+    profile_id: int
     symbol: str
     status: RunStatus
     started_at: datetime | None = None
@@ -85,6 +86,7 @@ class RunResponse(BaseModel):
 
 class ExecutionIntentResponse(BaseModel):
     id: str
+    profile_id: int
     source_run_id: str | None = None
     intent_type: ExecutionIntentType
     mode: TradingMode
@@ -107,6 +109,7 @@ class ExecutionIntentResponse(BaseModel):
 
 class OrderResponse(BaseModel):
     id: int
+    profile_id: int
     symbol: str
     mode: TradingMode
     direction: OrderIntent
@@ -133,6 +136,7 @@ class OrderResponse(BaseModel):
 
 class OrderTransitionResponse(BaseModel):
     id: int
+    profile_id: int
     order_id: int
     symbol: str
     from_status: OrderStatus | None = None
@@ -146,6 +150,7 @@ class OrderTransitionResponse(BaseModel):
 
 class OrderFillResponse(BaseModel):
     id: int
+    profile_id: int
     order_id: int
     broker_fill_id: str | None = None
     broker_order_id: str | None = None
@@ -160,6 +165,7 @@ class OrderFillResponse(BaseModel):
 
 class PositionResponse(BaseModel):
     id: int
+    profile_id: int
     symbol: str
     quantity: int
     average_entry_price: float
@@ -170,6 +176,7 @@ class PositionResponse(BaseModel):
 
 class RiskEventResponse(BaseModel):
     id: int
+    profile_id: int | None = None
     symbol: str | None = None
     severity: str
     code: str
@@ -267,6 +274,7 @@ class AuditLogResponse(BaseModel):
 
 class ReconciliationMismatchResponse(BaseModel):
     id: int
+    profile_id: int
     broker_slug: str
     symbol: str | None = None
     mismatch_type: str
@@ -288,6 +296,7 @@ class OrderReplaceRequest(BaseModel):
 
 
 class BacktestRequest(BaseModel):
+    profile_id: int | None = Field(default=None, ge=1)
     symbols: list[str]
     start: datetime
     end: datetime
@@ -315,6 +324,7 @@ class BacktestResponse(BaseModel):
 
 class BacktestSummaryResponse(BaseModel):
     id: str
+    profile_id: int
     task_id: str | None = None
     status: str
     symbols: list[str]
@@ -360,6 +370,7 @@ class BacktestTradeResponse(BaseModel):
 
 class TradeReviewResponse(BaseModel):
     id: int
+    profile_id: int
     source_run_id: str | None = None
     order_id: int
     symbol: str
@@ -397,6 +408,7 @@ class BacktestDetailResponse(BacktestSummaryResponse):
 
 
 class LiveEnablePrepareResponse(BaseModel):
+    profile_id: int
     approval_code: str
     expires_at: datetime
     live_trading_env_allowed: bool

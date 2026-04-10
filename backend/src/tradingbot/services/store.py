@@ -4,12 +4,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from tradingbot.config import get_settings
+from tradingbot.enums import BrokerSlug, MarketRegion
 from tradingbot.models import AuditLog, BotSettings, WatchlistSymbol
 from tradingbot.schemas.settings import (
     BotSettingsResponse,
     BotSettingsUpdate,
     BrokerCapability,
     BrokerSettings,
+    MarketProfileSummaryResponse,
     MarketSessionResponse,
     TradingProfile,
 )
@@ -21,16 +23,41 @@ from tradingbot.services.broker_capabilities import (
 )
 from tradingbot.services.calendar import MarketCalendarService
 
+DEFAULT_US_PROFILE_KEY = "us-alpaca"
+DEFAULT_INDIA_PROFILE_KEY = "india-paper"
 
-def ensure_bot_settings(session: Session) -> BotSettings:
-    settings_row = session.get(BotSettings, 1)
-    if settings_row is not None:
-        return settings_row
+def _normalize_string_list(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    return sorted({item.strip().upper() for item in values if item and item.strip()})
 
-    defaults = get_settings()
-    broker_definition = get_broker_definition(BrokerSettings().broker)
-    settings_row = BotSettings(
-        id=1,
+
+def _seed_profile(
+    *,
+    defaults,
+    profile_key: str,
+    display_name: str,
+    market_region: MarketRegion,
+    broker_slug: BrokerSlug,
+    execution_provider_kind: str,
+    data_provider_kind: str,
+    enabled_exchanges: list[str],
+    benchmark_symbols: list[str],
+    news_optional: bool,
+    is_default: bool,
+) -> BotSettings:
+    broker_definition = get_broker_definition(broker_slug)
+    return BotSettings(
+        profile_key=profile_key,
+        display_name=display_name,
+        market_region=market_region,
+        execution_provider_kind=execution_provider_kind,
+        data_provider_kind=data_provider_kind,
+        enabled=True,
+        is_default=is_default,
+        enabled_exchanges=enabled_exchanges,
+        benchmark_symbols=benchmark_symbols,
+        news_optional=news_optional,
         scan_interval_minutes=defaults.scan_interval_minutes,
         consensus_threshold=defaults.consensus_threshold,
         openai_model=defaults.openai_model,
@@ -41,18 +68,128 @@ def ensure_bot_settings(session: Session) -> BotSettings:
         broker_base_currency=broker_definition.default_base_currency,
         broker_permissions=list(broker_definition.default_permissions),
     )
-    session.add(settings_row)
-    session.commit()
-    session.refresh(settings_row)
+
+
+def ensure_market_profiles(session: Session) -> list[BotSettings]:
+    rows = session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+    defaults = get_settings()
+    if not rows:
+        session.add_all(
+            [
+                _seed_profile(
+                    defaults=defaults,
+                    profile_key=DEFAULT_US_PROFILE_KEY,
+                    display_name="US Alpaca",
+                    market_region=MarketRegion.US,
+                    broker_slug=BrokerSlug.ALPACA,
+                    execution_provider_kind="alpaca",
+                    data_provider_kind="alpaca",
+                    enabled_exchanges=["NASDAQ", "NYSE", "ARCA"],
+                    benchmark_symbols=["SPY", "QQQ"],
+                    news_optional=False,
+                    is_default=True,
+                ),
+                _seed_profile(
+                    defaults=defaults,
+                    profile_key=DEFAULT_INDIA_PROFILE_KEY,
+                    display_name="India Paper",
+                    market_region=MarketRegion.IN,
+                    broker_slug=BrokerSlug.INTERNAL_PAPER,
+                    execution_provider_kind="internal_paper",
+                    data_provider_kind="imported_files",
+                    enabled_exchanges=["NSE", "BSE", "MCX"],
+                    benchmark_symbols=["NIFTY 50", "BANKNIFTY", "SENSEX"],
+                    news_optional=True,
+                    is_default=False,
+                ),
+            ]
+        )
+        session.commit()
+        return session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+
+    changed = False
+    by_key = {row.profile_key: row for row in rows if row.profile_key}
+    us_profile = by_key.get(DEFAULT_US_PROFILE_KEY)
+    if us_profile is None:
+        us_profile = rows[0]
+        us_profile.profile_key = DEFAULT_US_PROFILE_KEY
+        us_profile.display_name = us_profile.display_name or "US Alpaca"
+        us_profile.market_region = us_profile.market_region or MarketRegion.US
+        us_profile.execution_provider_kind = us_profile.execution_provider_kind or "alpaca"
+        us_profile.data_provider_kind = us_profile.data_provider_kind or "alpaca"
+        us_profile.enabled = True if us_profile.enabled is None else us_profile.enabled
+        us_profile.is_default = True
+        us_profile.enabled_exchanges = _normalize_string_list(us_profile.enabled_exchanges or ["NASDAQ", "NYSE", "ARCA"])
+        us_profile.benchmark_symbols = _normalize_string_list(us_profile.benchmark_symbols or ["SPY", "QQQ"])
+        us_profile.news_optional = False if us_profile.news_optional is None else us_profile.news_optional
+        changed = True
+
+    if DEFAULT_INDIA_PROFILE_KEY not in by_key:
+        session.add(
+            _seed_profile(
+                defaults=defaults,
+                profile_key=DEFAULT_INDIA_PROFILE_KEY,
+                display_name="India Paper",
+                market_region=MarketRegion.IN,
+                broker_slug=BrokerSlug.INTERNAL_PAPER,
+                execution_provider_kind="internal_paper",
+                data_provider_kind="imported_files",
+                enabled_exchanges=["NSE", "BSE", "MCX"],
+                benchmark_symbols=["NIFTY 50", "BANKNIFTY", "SENSEX"],
+                news_optional=True,
+                is_default=False,
+            )
+        )
+        changed = True
+
+    if not any(row.is_default for row in rows):
+        us_profile.is_default = True
+        changed = True
+
+    if changed:
+        session.commit()
+        rows = session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+    return rows
+
+
+def ensure_bot_settings(
+    session: Session,
+    *,
+    profile_id: int | None = None,
+    profile_key: str | None = None,
+) -> BotSettings:
+    ensure_market_profiles(session)
+    query = select(BotSettings)
+    if profile_id is not None:
+        query = query.where(BotSettings.id == profile_id)
+    elif profile_key is not None:
+        query = query.where(BotSettings.profile_key == profile_key)
+    else:
+        query = query.where(BotSettings.is_default.is_(True))
+    settings_row = session.scalar(query.limit(1))
+    if settings_row is None:
+        raise ValueError("Requested market profile was not found.")
     return settings_row
 
 
-def replace_watchlist(session: Session, symbols: list[str]) -> list[WatchlistSymbol]:
-    existing = session.scalars(select(WatchlistSymbol)).all()
+def list_market_profiles(session: Session) -> list[BotSettings]:
+    ensure_market_profiles(session)
+    return session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+
+
+def list_enabled_profiles(session: Session) -> list[BotSettings]:
+    ensure_market_profiles(session)
+    return session.scalars(
+        select(BotSettings).where(BotSettings.enabled.is_(True)).order_by(BotSettings.id.asc())
+    ).all()
+
+
+def replace_watchlist(session: Session, settings_row: BotSettings, symbols: list[str]) -> list[WatchlistSymbol]:
+    existing = session.scalars(select(WatchlistSymbol).where(WatchlistSymbol.profile_id == settings_row.id)).all()
     for item in existing:
         session.delete(item)
-    normalized = sorted({symbol.upper().strip() for symbol in symbols if symbol.strip()})
-    rows = [WatchlistSymbol(symbol=symbol, enabled=True) for symbol in normalized]
+    normalized = _normalize_string_list(symbols)
+    rows = [WatchlistSymbol(profile_id=settings_row.id, symbol=symbol, enabled=True) for symbol in normalized]
     session.add_all(rows)
     return rows
 
@@ -81,6 +218,22 @@ def serialize_broker_settings(settings_row: BotSettings) -> BrokerSettings:
         timezone=settings_row.broker_timezone or broker_definition.default_timezone,
         base_currency=settings_row.broker_base_currency or broker_definition.default_base_currency,
         permissions=normalize_permissions(settings_row.broker_permissions, broker_definition),
+    )
+
+
+def serialize_market_profile_summary(settings_row: BotSettings) -> MarketProfileSummaryResponse:
+    return MarketProfileSummaryResponse(
+        profile_id=settings_row.id,
+        profile_key=settings_row.profile_key,
+        display_name=settings_row.display_name,
+        market_region=settings_row.market_region,
+        execution_provider_kind=settings_row.execution_provider_kind,
+        data_provider_kind=settings_row.data_provider_kind,
+        enabled=settings_row.enabled,
+        is_default=settings_row.is_default,
+        mode=settings_row.mode,
+        live_enabled=settings_row.live_enabled,
+        enabled_exchanges=list(settings_row.enabled_exchanges or []),
     )
 
 
@@ -123,7 +276,10 @@ def execution_block_reason(settings_row: BotSettings) -> str | None:
 
 def serialize_settings(session: Session, settings_row: BotSettings) -> BotSettingsResponse:
     watchlist = session.scalars(
-        select(WatchlistSymbol.symbol).where(WatchlistSymbol.enabled.is_(True)).order_by(WatchlistSymbol.symbol)
+        select(WatchlistSymbol.symbol)
+        .where(WatchlistSymbol.profile_id == settings_row.id)
+        .where(WatchlistSymbol.enabled.is_(True))
+        .order_by(WatchlistSymbol.symbol)
     ).all()
     broker_definition = get_broker_definition(settings_row.broker_slug)
     support = resolve_execution_support(settings_row)
@@ -133,6 +289,17 @@ def serialize_settings(session: Session, settings_row: BotSettings) -> BotSettin
     )
     live_mode_allowed = support.live_start_allowed and live_trading_env_allowed(settings_row)
     return BotSettingsResponse(
+        profile_id=settings_row.id,
+        profile_key=settings_row.profile_key,
+        display_name=settings_row.display_name,
+        market_region=settings_row.market_region,
+        execution_provider_kind=settings_row.execution_provider_kind,
+        data_provider_kind=settings_row.data_provider_kind,
+        enabled=settings_row.enabled,
+        is_default=settings_row.is_default,
+        enabled_exchanges=list(settings_row.enabled_exchanges or []),
+        benchmark_symbols=list(settings_row.benchmark_symbols or []),
+        news_optional=settings_row.news_optional,
         status=settings_row.status,
         mode=settings_row.mode,
         kill_switch_enabled=settings_row.kill_switch_enabled,
@@ -201,11 +368,18 @@ def apply_settings_update(
     session: Session,
     payload: BotSettingsUpdate,
     *,
+    profile_id: int | None = None,
+    profile_key: str | None = None,
     actor: str = "admin",
     actor_role: str = "admin",
     session_id: str | None = None,
 ) -> BotSettings:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id, profile_key=profile_key)
+    settings_row.display_name = payload.display_name.strip()
+    settings_row.enabled = payload.enabled
+    settings_row.enabled_exchanges = _normalize_string_list(payload.enabled_exchanges)
+    settings_row.benchmark_symbols = _normalize_string_list(payload.benchmark_symbols)
+    settings_row.news_optional = payload.news_optional
     settings_row.scan_interval_minutes = payload.scan_interval_minutes
     settings_row.consensus_threshold = payload.consensus_threshold
     settings_row.max_open_positions = payload.max_open_positions
@@ -249,14 +423,16 @@ def apply_settings_update(
         settings_row.live_enabled = False
     settings_row.live_enable_code_hash = None
     settings_row.live_enable_code_expires_at = None
-    replace_watchlist(session, payload.watchlist)
+    replace_watchlist(session, settings_row, payload.watchlist)
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="settings.updated",
             actor=actor,
             actor_role=actor_role,
             session_id=session_id,
             details={
+                "profile_key": settings_row.profile_key,
                 "watchlist_size": len(payload.watchlist),
                 "openai_model": payload.openai_model,
                 "broker": payload.broker_settings.broker.value,

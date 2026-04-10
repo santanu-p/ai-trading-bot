@@ -22,6 +22,12 @@ export const brokerOptions: ProfileOption<BrokerSlug>[] = [
     label: "Alpaca US Equities",
     description: "Current v2 scope: US cash-equity research with same-session bracket-order execution only.",
     supportedByCurrentExecutor: true
+  },
+  {
+    value: "internal_paper",
+    label: "India Paper Markets",
+    description: "Profile-scoped paper execution backed by imported India market files across NSE, BSE, and commodity sessions.",
+    supportedByCurrentExecutor: true
   }
 ];
 
@@ -32,17 +38,17 @@ export const tradingPatternOptions: ProfileOption<TradingPattern>[] = [
   { value: "swing", label: "Swing", description: "Multi-day trades driven by trend and continuation setups.", supportedByCurrentExecutor: false },
   { value: "positional", label: "Positional", description: "Longer holding windows with broader trend alignment.", supportedByCurrentExecutor: false },
   { value: "btst_stbt", label: "BTST / STBT", description: "Carry overnight with gap or continuation expectations.", supportedByCurrentExecutor: false },
-  { value: "futures_directional", label: "Futures Directional", description: "Directional futures analysis and trade selection.", supportedByCurrentExecutor: false },
+  { value: "futures_directional", label: "Futures Directional", description: "Directional futures analysis and trade selection.", supportedByCurrentExecutor: true },
   { value: "futures_hedged", label: "Futures Hedged", description: "Hedged futures setups with spread or protection logic.", supportedByCurrentExecutor: false },
-  { value: "options_buying", label: "Options Buying", description: "Directional options entries with premium paid.", supportedByCurrentExecutor: false },
-  { value: "options_selling", label: "Options Selling", description: "Premium selling and decay-focused setups.", supportedByCurrentExecutor: false }
+  { value: "options_buying", label: "Options Buying", description: "Directional options entries with premium paid.", supportedByCurrentExecutor: true },
+  { value: "options_selling", label: "Options Selling", description: "Premium selling and decay-focused setups.", supportedByCurrentExecutor: true }
 ];
 
 export const instrumentOptions: ProfileOption<InstrumentClass>[] = [
   { value: "cash_equity", label: "Cash Equity", description: "Stocks or ETFs in the cash market.", supportedByCurrentExecutor: true },
-  { value: "futures", label: "Futures", description: "Futures contracts and leveraged directional exposure.", supportedByCurrentExecutor: false },
-  { value: "options", label: "Options", description: "Calls, puts, or spread-style option structures.", supportedByCurrentExecutor: false },
-  { value: "mixed", label: "Mixed", description: "Use multiple instrument classes in the research workflow.", supportedByCurrentExecutor: false }
+  { value: "futures", label: "Futures", description: "Futures contracts and leveraged directional exposure.", supportedByCurrentExecutor: true },
+  { value: "options", label: "Options", description: "Calls, puts, or spread-style option structures.", supportedByCurrentExecutor: true },
+  { value: "mixed", label: "Mixed", description: "Use multiple instrument classes in the research workflow.", supportedByCurrentExecutor: true }
 ];
 
 export const strategyFamilyOptions: ProfileOption<StrategyFamily>[] = [

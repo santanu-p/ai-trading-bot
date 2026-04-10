@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from tradingbot.config import get_settings
-from tradingbot.enums import InstrumentClass, TradingPattern
+from tradingbot.enums import InstrumentClass, MarketRegion, TradingPattern
 from tradingbot.models import BotSettings
 
 
@@ -30,10 +30,20 @@ class MarketCalendarService:
         TradingPattern.INTRADAY,
     }
 
-    def __init__(self, venue: str, timezone: str, flatten_buffer_minutes: int) -> None:
+    def __init__(
+        self,
+        venue: str,
+        timezone: str,
+        flatten_buffer_minutes: int,
+        *,
+        market_region: MarketRegion = MarketRegion.US,
+        enabled_exchanges: list[str] | None = None,
+    ) -> None:
         self.venue = venue.strip() or "Unknown venue"
         self.timezone = timezone.strip() or "UTC"
         self.flatten_buffer_minutes = max(flatten_buffer_minutes, 1)
+        self.market_region = market_region
+        self.enabled_exchanges = {item.upper().strip() for item in (enabled_exchanges or []) if item and item.strip()}
         self.zone = ZoneInfo(self.timezone)
 
     @classmethod
@@ -42,6 +52,8 @@ class MarketCalendarService:
             venue=settings_row.broker_venue,
             timezone=settings_row.broker_timezone,
             flatten_buffer_minutes=get_settings().intraday_flatten_buffer_minutes,
+            market_region=settings_row.market_region,
+            enabled_exchanges=list(settings_row.enabled_exchanges or []),
         )
 
     def session_state(
@@ -52,9 +64,77 @@ class MarketCalendarService:
         at: datetime | None = None,
     ) -> MarketSessionState:
         reference = (at or datetime.now(UTC)).astimezone(self.zone)
+        if self.market_region == MarketRegion.IN:
+            return self._india_state(reference, trading_pattern, instrument_class)
         if self._is_us_equities():
             return self._us_equities_state(reference, trading_pattern, instrument_class)
         return self._generic_weekday_state(reference, trading_pattern, instrument_class)
+
+    def _india_state(
+        self,
+        reference: datetime,
+        trading_pattern: TradingPattern | None,
+        instrument_class: InstrumentClass | None,
+    ) -> MarketSessionState:
+        trading_day = reference.date()
+        if trading_day.weekday() >= 5:
+            return MarketSessionState(
+                venue=self.venue,
+                timezone=self.timezone,
+                status="closed",
+                reason="Weekend",
+                is_half_day=False,
+                can_scan=False,
+                can_submit_orders=False,
+                should_flatten_positions=False,
+                session_opens_at=None,
+                session_closes_at=None,
+                next_session_opens_at=self._next_india_open(reference, instrument_class),
+            )
+
+        session_open = self._india_session_open(trading_day, instrument_class)
+        session_close = self._india_session_close(trading_day, instrument_class)
+        flatten_window_start = session_close - timedelta(minutes=self.flatten_buffer_minutes)
+        same_session_strategy = self._requires_same_session_flatten(trading_pattern, instrument_class)
+
+        if reference < session_open:
+            status = "pre_open"
+            reason = "Market has not opened yet."
+            can_scan = False
+            can_submit_orders = False
+            should_flatten = False
+        elif reference >= session_close:
+            status = "closed"
+            reason = "Session closed."
+            can_scan = False
+            can_submit_orders = False
+            should_flatten = False
+        elif same_session_strategy and reference >= flatten_window_start:
+            status = "flatten_window"
+            reason = "Same-session strategies must flatten before the India session close."
+            can_scan = False
+            can_submit_orders = False
+            should_flatten = True
+        else:
+            status = "open"
+            reason = None
+            can_scan = True
+            can_submit_orders = True
+            should_flatten = False
+
+        return MarketSessionState(
+            venue=self.venue,
+            timezone=self.timezone,
+            status=status,
+            reason=reason,
+            is_half_day=False,
+            can_scan=can_scan,
+            can_submit_orders=can_submit_orders,
+            should_flatten_positions=should_flatten,
+            session_opens_at=session_open.astimezone(UTC),
+            session_closes_at=session_close.astimezone(UTC),
+            next_session_opens_at=self._next_india_open(reference, instrument_class),
+        )
 
     def _us_equities_state(
         self,
@@ -262,6 +342,27 @@ class MarketCalendarService:
         while probe.date().weekday() >= 5:
             probe += timedelta(days=1)
         return datetime.combine(probe.date(), time(9, 30), tzinfo=self.zone).astimezone(UTC)
+
+    def _india_session_open(self, trading_day: date, instrument_class: InstrumentClass | None) -> datetime:
+        if self._uses_india_commodity_window(instrument_class):
+            return datetime.combine(trading_day, time(9, 0), tzinfo=self.zone)
+        return datetime.combine(trading_day, time(9, 15), tzinfo=self.zone)
+
+    def _india_session_close(self, trading_day: date, instrument_class: InstrumentClass | None) -> datetime:
+        if self._uses_india_commodity_window(instrument_class):
+            return datetime.combine(trading_day, time(23, 30), tzinfo=self.zone)
+        return datetime.combine(trading_day, time(15, 30), tzinfo=self.zone)
+
+    def _next_india_open(self, reference: datetime, instrument_class: InstrumentClass | None) -> datetime:
+        probe = reference + timedelta(days=1)
+        while probe.date().weekday() >= 5:
+            probe += timedelta(days=1)
+        return self._india_session_open(probe.date(), instrument_class).astimezone(UTC)
+
+    def _uses_india_commodity_window(self, instrument_class: InstrumentClass | None) -> bool:
+        if "MCX" not in self.enabled_exchanges:
+            return False
+        return instrument_class in {InstrumentClass.FUTURES, InstrumentClass.OPTIONS, InstrumentClass.MIXED}
 
     def _is_market_holiday(self, value: date) -> bool:
         holidays = {

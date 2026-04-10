@@ -70,9 +70,23 @@ def _settings_response(row: BotSettings) -> BotStatusResponse:
     )
 
 
-def _build_execution_service(session: Session) -> tuple[BotSettings, ExecutionService]:
-    settings_row = ensure_bot_settings(session)
-    return settings_row, ExecutionService(session, build_broker_adapter(settings_row))
+def _build_execution_service(session: Session, profile_id: int | None = None) -> tuple[BotSettings, ExecutionService]:
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
+    return settings_row, ExecutionService(session, build_broker_adapter(session, settings_row), settings_row)
+
+
+def _build_execution_service_for_intent(session: Session, intent_id: str) -> tuple[BotSettings, ExecutionService]:
+    intent = session.get(ExecutionIntent, intent_id)
+    if intent is None:
+        raise HTTPException(status_code=404, detail=f"Execution intent {intent_id} was not found.")
+    return _build_execution_service(session, intent.profile_id)
+
+
+def _build_execution_service_for_order(session: Session, order_id: int) -> tuple[BotSettings, ExecutionService]:
+    order = session.get(OrderRecord, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} was not found.")
+    return _build_execution_service(session, order.profile_id)
 
 
 def _build_replace_request(payload: OrderReplaceRequest) -> ReplaceOrderRequest:
@@ -87,10 +101,11 @@ def _build_replace_request(payload: OrderReplaceRequest) -> ReplaceOrderRequest:
 
 @router.post("/bot/start", response_model=BotStatusResponse)
 def start_bot(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> BotStatusResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     if not strategy_profile_completed(settings_row):
         raise HTTPException(status_code=400, detail="Complete the trading-pattern intake before starting the bot.")
     support = resolve_execution_support(settings_row)
@@ -103,6 +118,7 @@ def start_bot(
     settings_row.status = BotStatus.RUNNING
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="bot.start",
             actor=current.email,
             actor_role=current.role.value,
@@ -116,13 +132,15 @@ def start_bot(
 
 @router.post("/bot/stop", response_model=BotStatusResponse)
 def stop_bot(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> BotStatusResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     settings_row.status = BotStatus.STOPPED
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="bot.stop",
             actor=current.email,
             actor_role=current.role.value,
@@ -137,10 +155,11 @@ def stop_bot(
 @router.post("/bot/mode", response_model=BotStatusResponse)
 def update_mode(
     payload: BotModeUpdate,
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> BotStatusResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     if payload.mode == TradingMode.LIVE:
         support = resolve_execution_support(settings_row)
         if not support.live_start_allowed or not live_trading_env_allowed(settings_row):
@@ -154,6 +173,7 @@ def update_mode(
         settings_row.live_enabled = False
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="bot.mode",
             actor=current.email,
             actor_role=current.role.value,
@@ -168,19 +188,21 @@ def update_mode(
 @router.post("/bot/kill-switch", response_model=BotStatusResponse)
 def toggle_kill_switch(
     enabled: bool,
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> BotStatusResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     settings_row.kill_switch_enabled = enabled
     if enabled:
         settings_row.live_enabled = False
-        AlertService(session).notify_kill_switch(
+        AlertService(session, profile_id=settings_row.id).notify_kill_switch(
             source="api_toggle",
             details={"actor": current.email, "actor_role": current.role.value},
         )
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="bot.kill_switch",
             actor=current.email,
             actor_role=current.role.value,
@@ -194,10 +216,11 @@ def toggle_kill_switch(
 
 @router.post("/bot/live/prepare", response_model=LiveEnablePrepareResponse)
 def prepare_live_enablement(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> LiveEnablePrepareResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     support = resolve_execution_support(settings_row)
     if settings_row.mode != TradingMode.LIVE:
         raise HTTPException(status_code=400, detail="Switch the bot into live mode before enabling live execution.")
@@ -209,6 +232,7 @@ def prepare_live_enablement(
     settings_row.live_enable_code_expires_at = expires_at
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="bot.live_prepare",
             actor=current.email,
             actor_role=current.role.value,
@@ -218,6 +242,7 @@ def prepare_live_enablement(
     )
     session.commit()
     return LiveEnablePrepareResponse(
+        profile_id=settings_row.id,
         approval_code=approval_code,
         expires_at=expires_at,
         live_trading_env_allowed=True,
@@ -227,10 +252,11 @@ def prepare_live_enablement(
 @router.post("/bot/live/enable", response_model=BotStatusResponse)
 def enable_live_execution(
     payload: LiveEnableRequest,
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> BotStatusResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     if settings_row.live_enable_code_hash is None or settings_row.live_enable_code_expires_at is None:
         raise HTTPException(status_code=400, detail="Prepare live enablement first.")
     if settings_row.live_enable_code_expires_at <= datetime.now(UTC):
@@ -242,6 +268,7 @@ def enable_live_execution(
     settings_row.live_enable_code_expires_at = None
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="bot.live_enable",
             actor=current.email,
             actor_role=current.role.value,
@@ -255,15 +282,17 @@ def enable_live_execution(
 
 @router.post("/bot/live/disable", response_model=BotStatusResponse)
 def disable_live_execution(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> BotStatusResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     settings_row.live_enabled = False
     settings_row.live_enable_code_hash = None
     settings_row.live_enable_code_expires_at = None
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="bot.live_disable",
             actor=current.email,
             actor_role=current.role.value,
@@ -277,10 +306,11 @@ def disable_live_execution(
 
 @router.post("/bot/flatten-all", response_model=FlattenResponse)
 def flatten_all_positions(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> FlattenResponse:
-    settings_row, execution = _build_execution_service(session)
+    settings_row, execution = _build_execution_service(session, profile_id)
     canceled_orders = execution.cancel_all_open_orders()
     flatten_submitted = execution.flatten_all_positions(
         mode=settings_row.mode,
@@ -294,10 +324,11 @@ def flatten_all_positions(
 
 @router.post("/bot/broker-kill", response_model=ActionResponse)
 def broker_kill(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> ActionResponse:
-    settings_row, execution = _build_execution_service(session)
+    settings_row, execution = _build_execution_service(session, profile_id)
     settings_row.kill_switch_enabled = True
     settings_row.live_enabled = False
     canceled_orders = execution.broker_kill(
@@ -305,7 +336,7 @@ def broker_kill(
         actor_role=current.role.value,
         session_id=current.session_id,
     )
-    AlertService(session).notify_kill_switch(
+    AlertService(session, profile_id=settings_row.id).notify_kill_switch(
         source="broker_kill",
         details={"actor": current.email, "actor_role": current.role.value, "canceled_orders": canceled_orders},
     )
@@ -315,21 +346,29 @@ def broker_kill(
 
 @router.get("/runs", response_model=list[RunResponse])
 def list_runs(
+    profile_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[RunResponse]:
-    rows = session.scalars(select(AgentRun).order_by(AgentRun.created_at.desc()).limit(limit)).all()
+    query = select(AgentRun).order_by(AgentRun.created_at.desc())
+    if profile_id is not None:
+        query = query.where(AgentRun.profile_id == profile_id)
+    rows = session.scalars(query.limit(limit)).all()
     return [RunResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
 @router.get("/decisions", response_model=list[CommitteeDecision])
 def list_decisions(
+    profile_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[CommitteeDecision]:
-    rows = session.scalars(select(TradeCandidate).order_by(TradeCandidate.created_at.desc()).limit(limit)).all()
+    query = select(TradeCandidate).order_by(TradeCandidate.created_at.desc())
+    if profile_id is not None:
+        query = query.where(TradeCandidate.profile_id == profile_id)
+    rows = session.scalars(query.limit(limit)).all()
     return [
         CommitteeDecision(
             symbol=row.symbol,
@@ -367,12 +406,15 @@ def current_operator(current: CurrentActor = Depends(get_current_operator)) -> C
 
 @router.get("/execution-intents", response_model=list[ExecutionIntentResponse])
 def list_execution_intents(
+    profile_id: int | None = Query(default=None, ge=1),
     status: ExecutionIntentStatus | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[ExecutionIntentResponse]:
     query = select(ExecutionIntent).order_by(ExecutionIntent.created_at.desc())
+    if profile_id is not None:
+        query = query.where(ExecutionIntent.profile_id == profile_id)
     if status is not None:
         query = query.where(ExecutionIntent.status == status)
     rows = session.scalars(query.limit(limit)).all()
@@ -385,10 +427,9 @@ def approve_execution_intent(
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> ExecutionIntentResponse:
-    settings_row = ensure_bot_settings(session)
+    settings_row, execution = _build_execution_service_for_intent(session, intent_id)
     if settings_row.mode == TradingMode.LIVE and not settings_row.live_enabled:
         raise HTTPException(status_code=409, detail="Enable live execution before approving live intents.")
-    _, execution = _build_execution_service(session)
     try:
         intent = execution.approve_intent(
             intent_id,
@@ -409,7 +450,7 @@ def reject_execution_intent(
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> ExecutionIntentResponse:
-    _, execution = _build_execution_service(session)
+    _, execution = _build_execution_service_for_intent(session, intent_id)
     try:
         intent = execution.reject_intent(
             intent_id,
@@ -425,11 +466,15 @@ def reject_execution_intent(
 
 @router.get("/orders", response_model=list[OrderResponse])
 def list_orders(
+    profile_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[OrderResponse]:
-    rows = session.scalars(select(OrderRecord).order_by(OrderRecord.created_at.desc()).limit(limit)).all()
+    query = select(OrderRecord).order_by(OrderRecord.created_at.desc())
+    if profile_id is not None:
+        query = query.where(OrderRecord.profile_id == profile_id)
+    rows = session.scalars(query.limit(limit)).all()
     return [OrderResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
@@ -439,9 +484,13 @@ def list_order_transitions(
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[OrderTransitionResponse]:
+    order = session.get(OrderRecord, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} was not found.")
     rows = session.scalars(
         select(OrderStateTransition)
         .where(OrderStateTransition.order_id == order_id)
+        .where(OrderStateTransition.profile_id == order.profile_id)
         .order_by(OrderStateTransition.transition_at.asc())
     ).all()
     return [OrderTransitionResponse.model_validate(row, from_attributes=True) for row in rows]
@@ -453,7 +502,15 @@ def list_order_fills(
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[OrderFillResponse]:
-    rows = session.scalars(select(OrderFill).where(OrderFill.order_id == order_id).order_by(OrderFill.filled_at.asc())).all()
+    order = session.get(OrderRecord, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} was not found.")
+    rows = session.scalars(
+        select(OrderFill)
+        .where(OrderFill.order_id == order_id)
+        .where(OrderFill.profile_id == order.profile_id)
+        .order_by(OrderFill.filled_at.asc())
+    ).all()
     return [OrderFillResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
@@ -464,13 +521,14 @@ def replace_order(
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> OrderResponse:
-    _, execution = _build_execution_service(session)
+    _, execution = _build_execution_service_for_order(session, order_id)
     try:
         row = execution.replace_order(order_id, _build_replace_request(payload))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.add(
         AuditLog(
+            profile_id=row.profile_id,
             action="order.replace",
             actor=current.email,
             actor_role=current.role.value,
@@ -488,13 +546,14 @@ def cancel_order(
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> OrderResponse:
-    _, execution = _build_execution_service(session)
+    _, execution = _build_execution_service_for_order(session, order_id)
     try:
         row = execution.cancel_order(order_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     session.add(
         AuditLog(
+            profile_id=row.profile_id,
             action="order.cancel",
             actor=current.email,
             actor_role=current.role.value,
@@ -508,13 +567,15 @@ def cancel_order(
 
 @router.post("/orders/cancel-all", response_model=FlattenResponse)
 def cancel_all_orders(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> FlattenResponse:
-    _, execution = _build_execution_service(session)
+    settings_row, execution = _build_execution_service(session, profile_id)
     canceled_orders = execution.cancel_all_open_orders()
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="orders.cancel_all",
             actor=current.email,
             actor_role=current.role.value,
@@ -528,25 +589,34 @@ def cancel_all_orders(
 
 @router.get("/positions", response_model=list[PositionResponse])
 def list_positions(
+    profile_id: int | None = Query(default=None, ge=1),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[PositionResponse]:
-    rows = session.scalars(select(PositionRecord).order_by(PositionRecord.symbol)).all()
+    query = select(PositionRecord).order_by(PositionRecord.symbol)
+    if profile_id is not None:
+        query = query.where(PositionRecord.profile_id == profile_id)
+    rows = session.scalars(query).all()
     return [PositionResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
 @router.get("/risk-events", response_model=list[RiskEventResponse])
 def list_risk_events(
+    profile_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=20, ge=1, le=100),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[RiskEventResponse]:
-    rows = session.scalars(select(RiskEvent).order_by(RiskEvent.created_at.desc()).limit(limit)).all()
+    query = select(RiskEvent).order_by(RiskEvent.created_at.desc())
+    if profile_id is not None:
+        query = query.where(RiskEvent.profile_id == profile_id)
+    rows = session.scalars(query.limit(limit)).all()
     return [RiskEventResponse.model_validate(row, from_attributes=True) for row in rows]
 
 
 @router.get("/execution-quality/samples", response_model=list[ExecutionQualitySampleResponse])
 def list_execution_quality_samples(
+    profile_id: int | None = Query(default=None, ge=1),
     symbol: str | None = None,
     outcome_status: OrderStatus | None = None,
     limit: int = Query(default=50, ge=1, le=500),
@@ -554,6 +624,8 @@ def list_execution_quality_samples(
     session: Session = Depends(db_session_dependency),
 ) -> list[ExecutionQualitySampleResponse]:
     query = select(ExecutionQualitySample).order_by(ExecutionQualitySample.created_at.desc())
+    if profile_id is not None:
+        query = query.where(ExecutionQualitySample.profile_id == profile_id)
     if symbol:
         query = query.where(ExecutionQualitySample.symbol == symbol.upper().strip())
     if outcome_status is not None:
@@ -563,6 +635,7 @@ def list_execution_quality_samples(
         ExecutionQualitySampleResponse(
             id=row.id,
             order_id=row.order_id,
+            profile_id=row.profile_id,
             symbol=row.symbol,
             broker_slug=row.broker_slug.value,
             venue=row.venue,
@@ -591,12 +664,13 @@ def list_execution_quality_samples(
 
 @router.get("/execution-quality/summary", response_model=list[ExecutionQualitySummaryResponse])
 def summarize_execution_quality(
+    profile_id: int | None = Query(default=None, ge=1),
     dimension: str = Query(default="symbol", pattern="^(symbol|venue|broker|order_type)$"),
     limit: int = Query(default=20, ge=1, le=200),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[ExecutionQualitySummaryResponse]:
-    _settings_row, execution = _build_execution_service(session)
+    _settings_row, execution = _build_execution_service(session, profile_id)
     try:
         rows = execution.execution_quality_summary(dimension=dimension, limit=limit)
     except ValueError as exc:
@@ -606,6 +680,7 @@ def summarize_execution_quality(
 
 @router.get("/trade-reviews", response_model=list[TradeReviewResponse])
 def list_trade_reviews(
+    profile_id: int | None = Query(default=None, ge=1),
     status: str | None = None,
     loss_cause: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -613,6 +688,8 @@ def list_trade_reviews(
     session: Session = Depends(db_session_dependency),
 ) -> list[TradeReviewResponse]:
     query = select(TradeReview).order_by(TradeReview.created_at.desc())
+    if profile_id is not None:
+        query = query.where(TradeReview.profile_id == profile_id)
     if status:
         query = query.where(TradeReview.status == status)
     if loss_cause:
@@ -621,6 +698,7 @@ def list_trade_reviews(
     return [
         TradeReviewResponse(
             id=row.id,
+            profile_id=row.profile_id,
             source_run_id=row.source_run_id,
             order_id=row.order_id,
             symbol=row.symbol,
@@ -643,17 +721,20 @@ def list_trade_reviews(
 
 @router.get("/trade-reviews/summary", response_model=list[TradeReviewSummaryResponse])
 def summarize_trade_reviews(
+    profile_id: int | None = Query(default=None, ge=1),
     limit: int = Query(default=100, ge=1, le=1000),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[TradeReviewSummaryResponse]:
-    service = TradeReviewService(session)
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
+    service = TradeReviewService(session, profile_id=settings_row.id)
     rows = service.summarize_model_performance(limit=limit)
     return [TradeReviewSummaryResponse.model_validate(item) for item in rows]
 
 
 @router.get("/audit-logs", response_model=list[AuditLogResponse])
 def list_audit_logs(
+    profile_id: int | None = Query(default=None, ge=1),
     action: str | None = None,
     actor: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
@@ -661,6 +742,8 @@ def list_audit_logs(
     session: Session = Depends(db_session_dependency),
 ) -> list[AuditLogResponse]:
     query = select(AuditLog).order_by(AuditLog.created_at.desc())
+    if profile_id is not None:
+        query = query.where(AuditLog.profile_id == profile_id)
     if action:
         query = query.where(AuditLog.action == action)
     if actor:
@@ -671,12 +754,15 @@ def list_audit_logs(
 
 @router.get("/reconciliation/mismatches", response_model=list[ReconciliationMismatchResponse])
 def list_reconciliation_mismatches(
+    profile_id: int | None = Query(default=None, ge=1),
     include_resolved: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=500),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[ReconciliationMismatchResponse]:
     query = select(ReconciliationMismatch)
+    if profile_id is not None:
+        query = query.where(ReconciliationMismatch.profile_id == profile_id)
     if not include_resolved:
         query = query.where(ReconciliationMismatch.resolved.is_(False))
     rows = session.scalars(query.order_by(ReconciliationMismatch.created_at.desc()).limit(limit)).all()
@@ -689,10 +775,11 @@ def list_reconciliation_mismatches(
 
 @router.post("/reconciliation/run")
 def run_reconciliation_now(
+    profile_id: int | None = Query(default=None, ge=1),
     current: CurrentActor = Depends(require_roles(OperatorRole.OPERATOR, OperatorRole.ADMIN)),
     session: Session = Depends(db_session_dependency),
 ) -> dict[str, int]:
-    settings_row, execution = _build_execution_service(session)
+    settings_row, execution = _build_execution_service(session, profile_id)
     service = ReconciliationService(
         session=session,
         settings_row=settings_row,
@@ -700,7 +787,7 @@ def run_reconciliation_now(
         adapter=execution.broker,
     )
     report = service.reconcile()
-    alerts = AlertService(session)
+    alerts = AlertService(session, profile_id=settings_row.id)
     alerts.evaluate_runtime_alerts()
     if report.live_paused:
         alerts.notify_reconciliation_unresolved(
@@ -710,6 +797,7 @@ def run_reconciliation_now(
         )
     session.add(
         AuditLog(
+            profile_id=settings_row.id,
             action="reconciliation.run",
             actor=current.email,
             actor_role=current.role.value,

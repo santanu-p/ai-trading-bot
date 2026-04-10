@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tradingbot.enums import RunStatus
-from tradingbot.models import AgentRun, AuditLog, BotSettings, RiskEvent, TradeCandidate
+from tradingbot.models import AgentRun, AuditLog, RiskEvent, TradeCandidate
 from tradingbot.services.alert_dispatch import dispatch_alert_webhooks
 from tradingbot.services.metrics import observe_counter
 
@@ -25,9 +25,16 @@ class AlertThresholds:
 
 
 class AlertService:
-    def __init__(self, session: Session, *, thresholds: AlertThresholds | None = None) -> None:
+    def __init__(
+        self,
+        session: Session,
+        *,
+        thresholds: AlertThresholds | None = None,
+        profile_id: int | None = None,
+    ) -> None:
         self.session = session
         self.thresholds = thresholds or AlertThresholds()
+        self.profile_id = profile_id
 
     def evaluate_runtime_alerts(self, *, now: datetime | None = None) -> int:
         as_of = now or datetime.now(UTC)
@@ -74,16 +81,21 @@ class AlertService:
             .order_by(RiskEvent.created_at.desc())
             .limit(max(limit, 1))
         )
+        if self.profile_id is not None:
+            query = query.where(RiskEvent.profile_id == self.profile_id)
         return list(self.session.scalars(query).all())
 
     def _alert_repeated_worker_failures(self, *, as_of: datetime) -> bool:
         window_start = as_of - timedelta(minutes=self.thresholds.worker_failure_window_minutes)
-        failure_count = self.session.scalar(
+        query = (
             select(func.count())
             .select_from(AgentRun)
             .where(AgentRun.created_at >= window_start)
             .where(AgentRun.status == RunStatus.FAILED)
         )
+        if self.profile_id is not None:
+            query = query.where(AgentRun.profile_id == self.profile_id)
+        failure_count = self.session.scalar(query)
         count = int(failure_count or 0)
         if count < self.thresholds.worker_failure_threshold:
             return False
@@ -100,21 +112,23 @@ class AlertService:
 
     def _alert_high_rejection_rate(self, *, as_of: datetime) -> bool:
         window_start = as_of - timedelta(minutes=self.thresholds.rejection_window_minutes)
-        total = self.session.scalar(
-            select(func.count())
-            .select_from(TradeCandidate)
-            .where(TradeCandidate.created_at >= window_start)
-        )
+        total_query = select(func.count()).select_from(TradeCandidate).where(TradeCandidate.created_at >= window_start)
+        if self.profile_id is not None:
+            total_query = total_query.where(TradeCandidate.profile_id == self.profile_id)
+        total = self.session.scalar(total_query)
         total_count = int(total or 0)
         if total_count < self.thresholds.rejection_rate_min_samples:
             return False
 
-        rejected = self.session.scalar(
+        rejected_query = (
             select(func.count())
             .select_from(TradeCandidate)
             .where(TradeCandidate.created_at >= window_start)
             .where(TradeCandidate.status != "approved")
         )
+        if self.profile_id is not None:
+            rejected_query = rejected_query.where(TradeCandidate.profile_id == self.profile_id)
+        rejected = self.session.scalar(rejected_query)
         rejected_count = int(rejected or 0)
         rejection_rate = rejected_count / max(total_count, 1)
         if rejection_rate < self.thresholds.rejection_rate_threshold:
@@ -134,12 +148,15 @@ class AlertService:
 
     def _alert_malformed_rate(self, *, as_of: datetime) -> bool:
         window_start = as_of - timedelta(minutes=self.thresholds.malformed_window_minutes)
-        malformed_count = self.session.scalar(
+        malformed_query = (
             select(func.count())
             .select_from(RiskEvent)
             .where(RiskEvent.created_at >= window_start)
             .where(RiskEvent.code == "agent_output_malformed")
         )
+        if self.profile_id is not None:
+            malformed_query = malformed_query.where(RiskEvent.profile_id == self.profile_id)
+        malformed_count = self.session.scalar(malformed_query)
         count = int(malformed_count or 0)
         if count < self.thresholds.malformed_threshold:
             return False
@@ -165,17 +182,21 @@ class AlertService:
     ) -> bool:
         dedupe_window = dedupe_minutes if dedupe_minutes is not None else self.thresholds.dedupe_minutes
         cutoff = datetime.now(UTC) - timedelta(minutes=max(dedupe_window, 1))
-        existing = self.session.scalar(
+        existing_query = (
             select(RiskEvent)
             .where(RiskEvent.code == code)
             .where(RiskEvent.created_at >= cutoff)
             .order_by(RiskEvent.created_at.desc())
         )
+        if self.profile_id is not None:
+            existing_query = existing_query.where(RiskEvent.profile_id == self.profile_id)
+        existing = self.session.scalar(existing_query)
         if existing is not None:
             return False
 
         self.session.add(
             RiskEvent(
+                profile_id=self.profile_id,
                 symbol=None,
                 severity=severity,
                 code=code,
@@ -185,6 +206,7 @@ class AlertService:
         )
         self.session.add(
             AuditLog(
+                profile_id=self.profile_id,
                 action="alert.emitted",
                 actor="system",
                 actor_role="system",
@@ -204,14 +226,10 @@ class AlertService:
         return True
 
 
-def settings_alert_snapshot(session: Session) -> dict[str, object]:
-    settings_row = session.get(BotSettings, 1)
-    if settings_row is None:
-        return {
-            "kill_switch_enabled": False,
-            "live_enabled": False,
-            "mode": "paper",
-        }
+def settings_alert_snapshot(session: Session, *, profile_id: int | None = None) -> dict[str, object]:
+    from tradingbot.services.store import ensure_bot_settings
+
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
     return {
         "kill_switch_enabled": settings_row.kill_switch_enabled,
         "live_enabled": settings_row.live_enabled,

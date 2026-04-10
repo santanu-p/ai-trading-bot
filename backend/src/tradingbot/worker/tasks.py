@@ -38,6 +38,7 @@ from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.risk import PortfolioRiskService, PositionExposure, RiskEngine, RiskPolicy
 from tradingbot.services.store import (
     ensure_bot_settings,
+    list_enabled_profiles,
     live_trading_env_allowed,
     resolve_execution_support,
     serialize_trading_profile,
@@ -183,18 +184,28 @@ def enqueue_backtest(payload: BacktestRequest, report_id: str) -> AsyncResult:
 
 
 @celery_app.task(name="tradingbot.worker.tasks.run_market_scan")
-def run_market_scan() -> dict[str, int]:
+def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
     started = perf_counter()
     observe_counter("worker.market_scan.invocations")
     settings = get_settings()
     session = get_session_factory()()
     try:
-        settings_row = ensure_bot_settings(session)
+        if profile_id is None:
+            aggregate = {"queued": 0, "repaired_children": 0, "unresolved_mismatches": 0}
+            for profile in list_enabled_profiles(session):
+                result = run_market_scan(profile.id)
+                aggregate["queued"] += int(result.get("queued", 0))
+                aggregate["repaired_children"] += int(result.get("repaired_children", 0))
+                aggregate["unresolved_mismatches"] += int(result.get("unresolved_mismatches", 0))
+            return aggregate
+
+        settings_row = ensure_bot_settings(session, profile_id=profile_id)
         if settings_row.status != BotStatus.RUNNING or settings_row.kill_switch_enabled:
             return {"queued": 0, "repaired_children": 0, "unresolved_mismatches": 0}
         if not strategy_profile_completed(settings_row):
             session.add(
                 RiskEvent(
+                    profile_id=settings_row.id,
                     symbol=None,
                     severity="warning",
                     code="strategy_profile_missing",
@@ -211,6 +222,7 @@ def run_market_scan() -> dict[str, int]:
         ):
             session.add(
                 RiskEvent(
+                    profile_id=settings_row.id,
                     symbol=None,
                     severity="critical",
                     code="live_scope_unsupported",
@@ -222,13 +234,13 @@ def run_market_scan() -> dict[str, int]:
             session.commit()
             return {"queued": 0, "repaired_children": 0, "unresolved_mismatches": 0}
 
-        broker = build_broker_adapter(settings_row)
+        broker = build_broker_adapter(session, settings_row)
         market_data = build_market_data_adapter(settings_row)
         news_data = build_news_adapter(settings_row)
         agent_runner = AgentRunner(settings_row.openai_model)
         committee = CommitteeService(settings_row.consensus_threshold, settings.min_approval_votes)
         risk_engine = _build_risk_engine(settings_row)
-        execution = ExecutionService(session, broker)
+        execution = ExecutionService(session, broker, settings_row)
         calendar = MarketCalendarService.for_settings(settings_row)
         reconciliation = ReconciliationService(
             session=session,
@@ -250,7 +262,7 @@ def run_market_scan() -> dict[str, int]:
             instrument_class=settings_row.instrument_class,
         )
         if session_state.should_flatten_positions:
-            if session.query(PositionRecord).count() > 0:
+            if session.query(PositionRecord).filter(PositionRecord.profile_id == settings_row.id).count() > 0:
                 enqueue_session_flatten("session_close_flatten")
             return {
                 "queued": 0,
@@ -260,6 +272,7 @@ def run_market_scan() -> dict[str, int]:
         if not session_state.can_scan:
             session.add(
                 RiskEvent(
+                    profile_id=settings_row.id,
                     symbol=None,
                     severity="warning",
                     code="market_closed",
@@ -279,6 +292,7 @@ def run_market_scan() -> dict[str, int]:
         execution.sync_positions_snapshot(broker_positions, source="scan_snapshot")
         session.add(
             PortfolioSnapshot(
+                profile_id=settings_row.id,
                 equity=account.equity,
                 cash=account.cash,
                 buying_power=account.buying_power,
@@ -288,12 +302,16 @@ def run_market_scan() -> dict[str, int]:
         )
         session.commit()
 
-        open_positions = session.query(PositionRecord).count()
-        watchlist = session.scalars(select(WatchlistSymbol).where(WatchlistSymbol.enabled.is_(True))).all()
+        open_positions = session.query(PositionRecord).filter(PositionRecord.profile_id == settings_row.id).count()
+        watchlist = session.scalars(
+            select(WatchlistSymbol)
+            .where(WatchlistSymbol.profile_id == settings_row.id)
+            .where(WatchlistSymbol.enabled.is_(True))
+        ).all()
         end = datetime.now(UTC)
         start = end - timedelta(minutes=settings_row.scan_interval_minutes * 40)
         queued = 0
-        portfolio_risk = PortfolioRiskService(session, risk_engine.policy)
+        portfolio_risk = PortfolioRiskService(session, risk_engine.policy, profile_id=settings_row.id)
         runtime_metrics = portfolio_risk.compute_runtime_metrics(
             equity=account.equity,
             positions=broker_positions,
@@ -317,7 +335,8 @@ def run_market_scan() -> dict[str, int]:
             )
         )
         index_bars: dict[str, list] = {}
-        for index_symbol in ("SPY", "QQQ"):
+        benchmark_symbols = settings_row.benchmark_symbols or (["SPY", "QQQ"] if settings_row.market_region.value == "us" else [])
+        for index_symbol in benchmark_symbols:
             try:
                 index_bars[index_symbol] = market_data.get_intraday_bars(
                     index_symbol,
@@ -329,6 +348,7 @@ def run_market_scan() -> dict[str, int]:
                 index_bars[index_symbol] = []
                 session.add(
                     RiskEvent(
+                        profile_id=settings_row.id,
                         symbol=index_symbol,
                         severity="warning",
                         code="index_context_unavailable",
@@ -340,7 +360,7 @@ def run_market_scan() -> dict[str, int]:
         session.commit()
 
         for item in watchlist:
-            run = AgentRun(symbol=item.symbol, status=RunStatus.RUNNING, started_at=end)
+            run = AgentRun(profile_id=settings_row.id, symbol=item.symbol, status=RunStatus.RUNNING, started_at=end)
             session.add(run)
             session.commit()
             session.refresh(run)
@@ -391,6 +411,7 @@ def run_market_scan() -> dict[str, int]:
                     )
                     session.add(
                         TradeCandidate(
+                            profile_id=settings_row.id,
                             run_id=run.id,
                             symbol=quality_reject.symbol,
                             direction=quality_reject.direction,
@@ -409,6 +430,7 @@ def run_market_scan() -> dict[str, int]:
                     run.decision_payload = quality_payload
                     session.add(
                         RiskEvent(
+                            profile_id=settings_row.id,
                             symbol=item.symbol,
                             severity="critical",
                             code="data_quality_rejected",
@@ -453,6 +475,7 @@ def run_market_scan() -> dict[str, int]:
                     )
                     session.add(
                         TradeCandidate(
+                            profile_id=settings_row.id,
                             run_id=run.id,
                             symbol=execution_reject.symbol,
                             direction=execution_reject.direction,
@@ -471,6 +494,7 @@ def run_market_scan() -> dict[str, int]:
                     run.decision_payload = execution_payload
                     session.add(
                         RiskEvent(
+                            profile_id=settings_row.id,
                             symbol=item.symbol,
                             severity="warning",
                             code="execution_feedback_rejected",
@@ -561,6 +585,7 @@ def run_market_scan() -> dict[str, int]:
 
                 session.add(
                     TradeCandidate(
+                        profile_id=settings_row.id,
                         run_id=run.id,
                         symbol=decision.symbol,
                         direction=decision.direction,
@@ -605,6 +630,7 @@ def run_market_scan() -> dict[str, int]:
                 else:
                     session.add(
                         RiskEvent(
+                            profile_id=settings_row.id,
                             symbol=item.symbol,
                             severity="warning",
                             code="trade_rejected",
@@ -650,6 +676,7 @@ def run_market_scan() -> dict[str, int]:
                 run.decision_payload = agent_payload
                 session.add(
                     TradeCandidate(
+                        profile_id=settings_row.id,
                         run_id=run.id,
                         symbol=agent_reject.symbol,
                         direction=agent_reject.direction,
@@ -665,6 +692,7 @@ def run_market_scan() -> dict[str, int]:
                 )
                 session.add(
                     RiskEvent(
+                        profile_id=settings_row.id,
                         symbol=item.symbol,
                         severity="warning",
                         code="agent_output_malformed",
@@ -680,6 +708,7 @@ def run_market_scan() -> dict[str, int]:
                 run.error_message = str(exc)
                 session.add(
                     RiskEvent(
+                        profile_id=settings_row.id,
                         symbol=item.symbol,
                         severity="critical",
                         code="scan_failure",
@@ -692,7 +721,7 @@ def run_market_scan() -> dict[str, int]:
 
         repaired_children = execution.repair_broken_child_orders()
         post_report = reconciliation.reconcile()
-        AlertService(session).evaluate_runtime_alerts()
+        AlertService(session, profile_id=settings_row.id).evaluate_runtime_alerts()
         session.commit()
 
         observe_counter("worker.market_scan.completed")
@@ -710,14 +739,14 @@ def run_market_scan() -> dict[str, int]:
 
 
 @celery_app.task(name="tradingbot.worker.tasks.run_reconciliation")
-def run_reconciliation() -> dict[str, int]:
+def run_reconciliation(profile_id: int | None = None) -> dict[str, int]:
     started = perf_counter()
     observe_counter("worker.reconciliation.invocations")
     session = get_session_factory()()
     try:
-        settings_row = ensure_bot_settings(session)
-        broker = build_broker_adapter(settings_row)
-        execution = ExecutionService(session, broker)
+        settings_row = ensure_bot_settings(session, profile_id=profile_id)
+        broker = build_broker_adapter(session, settings_row)
+        execution = ExecutionService(session, broker, settings_row)
         service = ReconciliationService(
             session=session,
             settings_row=settings_row,
@@ -725,7 +754,7 @@ def run_reconciliation() -> dict[str, int]:
             adapter=broker,
         )
         report = service.reconcile()
-        AlertService(session).evaluate_runtime_alerts()
+        AlertService(session, profile_id=settings_row.id).evaluate_runtime_alerts()
         session.commit()
         observe_counter("worker.reconciliation.completed")
         return {
@@ -759,7 +788,7 @@ def run_backtest(payload: dict) -> dict[str, int]:
             report.error_message = None
             session.commit()
 
-        settings_row = ensure_bot_settings(session)
+        settings_row = ensure_bot_settings(session, profile_id=request.profile_id)
         market_data = build_market_data_adapter(settings_row)
         news_data = build_news_adapter(settings_row)
         service = BacktestService(market_data, news_data)
@@ -784,6 +813,7 @@ def run_backtest(payload: dict) -> dict[str, int]:
 
         if report is None:
             report = BacktestReport(
+                profile_id=settings_row.id,
                 symbols=request.symbols,
                 start_at=request.start,
                 end_at=request.end,
@@ -824,6 +854,7 @@ def run_backtest(payload: dict) -> dict[str, int]:
         for item in result.trades:
             session.add(
                 BacktestTrade(
+                    profile_id=settings_row.id,
                     report_id=report.id,
                     symbol=item.symbol,
                     status=item.status,

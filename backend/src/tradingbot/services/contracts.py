@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from tradingbot.enums import InstrumentClass, OptionRight
+from tradingbot.enums import InstrumentClass, MarketRegion, OptionRight
 from tradingbot.models import InstrumentContract
 
 
@@ -18,20 +18,26 @@ class ContractValidationResult:
 
 
 class ContractMasterService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, *, market_region: MarketRegion = MarketRegion.US) -> None:
         self.session = session
+        self.market_region = market_region
 
     def get_contract(self, symbol: str) -> InstrumentContract | None:
         normalized = symbol.upper().strip()
         if not normalized:
             return None
-        return self.session.scalar(select(InstrumentContract).where(InstrumentContract.symbol == normalized))
+        return self.session.scalar(
+            select(InstrumentContract)
+            .where(InstrumentContract.market_region == self.market_region)
+            .where(InstrumentContract.symbol == normalized)
+        )
 
     def upsert_contract(
         self,
         *,
         symbol: str,
         instrument_class: InstrumentClass,
+        market_region: MarketRegion | None = None,
         underlying_symbol: str | None = None,
         exchange: str = "UNKNOWN",
         tick_size: float = 0.01,
@@ -51,11 +57,21 @@ class ContractMasterService:
         if not normalized_symbol:
             raise ValueError("Contract symbol is required.")
 
-        contract = self.get_contract(normalized_symbol)
+        target_region = market_region or self.market_region
+        contract = self.session.scalar(
+            select(InstrumentContract)
+            .where(InstrumentContract.market_region == target_region)
+            .where(InstrumentContract.symbol == normalized_symbol)
+        )
         if contract is None:
-            contract = InstrumentContract(symbol=normalized_symbol, instrument_class=instrument_class)
+            contract = InstrumentContract(
+                market_region=target_region,
+                symbol=normalized_symbol,
+                instrument_class=instrument_class,
+            )
             self.session.add(contract)
 
+        contract.market_region = target_region
         contract.instrument_class = instrument_class
         contract.underlying_symbol = underlying_symbol.upper().strip() if underlying_symbol else None
         contract.exchange = exchange.strip() or "UNKNOWN"
@@ -81,6 +97,7 @@ class ContractMasterService:
             return contract
 
         contract = InstrumentContract(
+            market_region=self.market_region,
             symbol=normalized_symbol,
             instrument_class=InstrumentClass.CASH_EQUITY,
             exchange="SMART",
@@ -145,6 +162,7 @@ class ContractMasterService:
         normalized_underlying = underlying_symbol.upper().strip()
         rows = self.session.scalars(
             select(InstrumentContract)
+            .where(InstrumentContract.market_region == self.market_region)
             .where(InstrumentContract.instrument_class == InstrumentClass.OPTIONS)
             .where(InstrumentContract.underlying_symbol == normalized_underlying)
             .where(InstrumentContract.option_right == right)
@@ -176,6 +194,7 @@ class ContractMasterService:
         underlying = current.underlying_symbol or current.symbol
         candidates = self.session.scalars(
             select(InstrumentContract)
+            .where(InstrumentContract.market_region == self.market_region)
             .where(InstrumentContract.instrument_class == InstrumentClass.FUTURES)
             .where(InstrumentContract.is_active.is_(True))
             .where(InstrumentContract.underlying_symbol == underlying)

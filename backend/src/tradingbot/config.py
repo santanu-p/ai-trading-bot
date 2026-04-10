@@ -98,6 +98,7 @@ class Settings:
     stream_poll_interval_seconds: int = _env_int("STREAM_POLL_INTERVAL_SECONDS", 5)
     alert_webhook_urls: tuple[str, ...] = _env_csv("ALERT_WEBHOOK_URLS")
     alert_webhook_timeout_seconds: float = _env_float("ALERT_WEBHOOK_TIMEOUT_SECONDS", 5.0)
+    india_import_root: str = os.getenv("INDIA_IMPORT_ROOT", "backend/data/india")
 
     @property
     def normalized_environment(self) -> str:

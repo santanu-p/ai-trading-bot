@@ -21,9 +21,10 @@ class PreTradeValidationResult:
 
 
 class PreTradeValidator:
-    def __init__(self, session: Session, contract_master: ContractMasterService) -> None:
+    def __init__(self, session: Session, contract_master: ContractMasterService, *, profile_id: int | None = None) -> None:
         self.session = session
         self.contract_master = contract_master
+        self.profile_id = profile_id
 
     def validate(
         self,
@@ -89,10 +90,11 @@ class PreTradeValidator:
         if existing_margin_usage + required_margin > account.equity * 2:
             reasons.append("Margin usage would exceed exchange-account limits.")
 
+        open_order_query = select(func.count()).select_from(OrderRecord)
+        if self.profile_id is not None:
+            open_order_query = open_order_query.where(OrderRecord.profile_id == self.profile_id)
         open_order_count = self.session.scalar(
-            select(func.count())
-            .select_from(OrderRecord)
-            .where(
+            open_order_query.where(
                 OrderRecord.status.notin_(
                     (
                         OrderStatus.FILLED,

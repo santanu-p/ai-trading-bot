@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+from uuid import uuid4
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from tradingbot.config import get_settings
 from tradingbot.enums import BrokerSlug, InstrumentClass, OrderIntent, OrderStatus, OrderType, TimeInForce, TradingMode
@@ -636,6 +642,280 @@ class AlpacaNewsAdapter(AlpacaRESTMixin):
         ]
 
 
+class ImportedFileStore:
+    def __init__(self, root: str | Path | None = None) -> None:
+        settings = get_settings()
+        self.root = Path(root or settings.india_import_root)
+        self.bars_dir = self.root / "bars"
+        self.aggregate_bars_json = self.root / "bars.json"
+        self.news_json = self.root / "news.json"
+
+    def load_bars(
+        self,
+        symbol: str,
+        *,
+        start: datetime,
+        end: datetime,
+    ) -> list[BarPoint]:
+        rows = self._read_symbol_bar_rows(symbol)
+        points = [_bar_from_row(item) for item in rows]
+        return [
+            point
+            for point in sorted(points, key=lambda item: item.timestamp)
+            if start <= point.timestamp <= end
+        ]
+
+    def latest_price(self, symbol: str) -> tuple[float | None, datetime | None]:
+        rows = self._read_symbol_bar_rows(symbol)
+        if not rows:
+            return None, None
+        latest = max((_bar_from_row(item) for item in rows), key=lambda item: item.timestamp, default=None)
+        if latest is None:
+            return None, None
+        return latest.close, latest.timestamp
+
+    def load_news(
+        self,
+        symbol: str,
+        *,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 200,
+    ) -> list[NewsItem]:
+        if not self.news_json.exists():
+            return []
+        try:
+            payload = json.loads(self.news_json.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return []
+        rows = payload if isinstance(payload, list) else []
+        normalized_symbol = symbol.upper().strip()
+        items: list[NewsItem] = []
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            symbols = {str(raw).upper().strip() for raw in item.get("symbols", []) if str(raw).strip()}
+            if symbols and normalized_symbol not in symbols:
+                continue
+            created_at = _to_datetime(item.get("created_at"))
+            if created_at is None:
+                continue
+            if start is not None and created_at < start:
+                continue
+            if end is not None and created_at > end:
+                continue
+            items.append(
+                NewsItem(
+                    headline=str(item.get("headline") or ""),
+                    summary=str(item.get("summary") or ""),
+                    source=str(item.get("source") or "imported"),
+                    created_at=created_at,
+                    sentiment_hint=str(item.get("sentiment_hint") or item.get("headline") or ""),
+                )
+            )
+        items.sort(key=lambda entry: entry.created_at, reverse=start is None and end is None)
+        return items[: max(limit, 1)]
+
+    def _read_symbol_bar_rows(self, symbol: str) -> list[dict[str, Any]]:
+        normalized_symbol = symbol.upper().strip()
+        symbol_stem = _sanitize_symbol_filename(normalized_symbol)
+        for candidate in [self.bars_dir / f"{symbol_stem}.json", self.bars_dir / f"{symbol_stem}.csv"]:
+            if not candidate.exists():
+                continue
+            if candidate.suffix == ".json":
+                try:
+                    payload = json.loads(candidate.read_text(encoding="utf-8"))
+                except json.JSONDecodeError:
+                    return []
+                return payload if isinstance(payload, list) else []
+            with candidate.open("r", encoding="utf-8", newline="") as handle:
+                return [dict(row) for row in csv.DictReader(handle)]
+
+        if self.aggregate_bars_json.exists():
+            try:
+                payload = json.loads(self.aggregate_bars_json.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return []
+            if isinstance(payload, dict):
+                rows = payload.get(normalized_symbol, [])
+                return rows if isinstance(rows, list) else []
+        return []
+
+
+class IndiaImportedMarketDataAdapter:
+    def __init__(self, store: ImportedFileStore | None = None) -> None:
+        self.store = store or ImportedFileStore()
+
+    def get_intraday_bars(
+        self,
+        symbol: str,
+        *,
+        start: datetime,
+        end: datetime,
+        interval_minutes: int,
+    ) -> list[BarPoint]:
+        del interval_minutes
+        return self.store.load_bars(symbol, start=start, end=end)
+
+
+class IndiaImportedNewsAdapter:
+    def __init__(self, store: ImportedFileStore | None = None) -> None:
+        self.store = store or ImportedFileStore()
+
+    def get_recent_news(self, symbol: str, *, limit: int = 10) -> list[NewsItem]:
+        return self.store.load_news(symbol, limit=limit)
+
+    def get_news_between(
+        self,
+        symbol: str,
+        *,
+        start: datetime,
+        end: datetime,
+        limit: int = 200,
+    ) -> list[NewsItem]:
+        return self.store.load_news(symbol, start=start, end=end, limit=limit)
+
+
+class IndiaPaperExecutionAdapter:
+    def __init__(self, session: Session, settings_row: BotSettings, store: ImportedFileStore | None = None) -> None:
+        self.session = session
+        self.settings_row = settings_row
+        self.store = store or ImportedFileStore()
+        self.broker_slug = BrokerSlug.INTERNAL_PAPER
+
+    def get_account_snapshot(self) -> AccountSnapshot:
+        from tradingbot.models import PositionRecord
+
+        positions = self.session.scalars(
+            select(PositionRecord).where(PositionRecord.profile_id == self.settings_row.id)
+        ).all()
+        equity = 1_000_000.0
+        exposure = sum(max(position.market_value, 0.0) for position in positions)
+        daily_pl = sum(position.unrealized_pl for position in positions)
+        cash = max(equity - exposure, 0.0)
+        return AccountSnapshot(equity=equity, cash=cash, buying_power=cash, daily_pl=daily_pl)
+
+    def get_account(self) -> AccountSnapshot:
+        return self.get_account_snapshot()
+
+    def list_open_orders(self) -> list[BrokerOrder]:
+        from tradingbot.models import OrderRecord
+
+        rows = self.session.scalars(
+            select(OrderRecord)
+            .where(OrderRecord.profile_id == self.settings_row.id)
+            .where(OrderRecord.status.notin_((OrderStatus.FILLED, OrderStatus.CANCELED, OrderStatus.REJECTED, OrderStatus.EXPIRED)))
+            .order_by(OrderRecord.created_at.desc())
+        ).all()
+        return [_map_local_order(row) for row in rows]
+
+    def list_positions(self) -> list[BrokerPosition]:
+        from tradingbot.models import PositionRecord
+
+        rows = self.session.scalars(
+            select(PositionRecord).where(PositionRecord.profile_id == self.settings_row.id).order_by(PositionRecord.symbol.asc())
+        ).all()
+        return [
+            BrokerPosition(
+                broker_position_id=row.broker_position_id or f"position-{row.id}",
+                symbol=row.symbol,
+                quantity=row.quantity,
+                average_entry_price=row.average_entry_price,
+                market_value=row.market_value,
+                unrealized_pl=row.unrealized_pl,
+                side=row.side,
+                raw={"profile_id": row.profile_id},
+            )
+            for row in rows
+        ]
+
+    def place_order(self, order: OrderRequest) -> BrokerOrder:
+        fill_price, filled_at = self.store.latest_price(order.symbol)
+        if fill_price is None:
+            raise BrokerAPIError(
+                f"No imported India bar data found for {order.symbol}.",
+                category="validation",
+            )
+        broker_order_id = f"india-paper-{uuid4().hex[:18]}"
+        return BrokerOrder(
+            broker_order_id=broker_order_id,
+            client_order_id=order.client_order_id or broker_order_id,
+            symbol=order.symbol,
+            side=order.side,
+            order_type=order.order_type,
+            time_in_force=order.time_in_force,
+            quantity=order.quantity,
+            filled_quantity=order.quantity,
+            average_fill_price=round(fill_price, 4),
+            limit_price=order.limit_price,
+            stop_price=order.stop_price,
+            take_profit=order.take_profit,
+            trailing_percent=order.trailing_percent,
+            trailing_amount=order.trailing_amount,
+            status=OrderStatus.FILLED,
+            status_reason="Filled by India paper simulator using imported market data.",
+            updated_at=filled_at or datetime.now(UTC),
+            raw={
+                "provider": "india_paper",
+                "fill_id": f"fill-{broker_order_id}",
+                "fill_price": round(fill_price, 4),
+                "fill_qty": order.quantity,
+                "filled_at": (filled_at or datetime.now(UTC)).astimezone(UTC).isoformat(),
+            },
+        )
+
+    def replace_order(self, broker_order_id: str, patch: ReplaceOrderRequest) -> BrokerOrder:
+        return self.get_order(broker_order_id)
+
+    def cancel_order(self, broker_order_id: str) -> bool:
+        del broker_order_id
+        return True
+
+    def cancel_all_orders(self) -> int:
+        return len(self.list_open_orders())
+
+    def close_all_positions(self) -> int:
+        return len(self.list_positions())
+
+    def get_order(self, broker_order_id: str) -> BrokerOrder:
+        from tradingbot.models import OrderRecord
+
+        row = self.session.scalar(
+            select(OrderRecord)
+            .where(OrderRecord.profile_id == self.settings_row.id)
+            .where(OrderRecord.broker_order_id == broker_order_id)
+        )
+        if row is None:
+            raise BrokerAPIError("India paper order was not found.", code=404, category="not_found")
+        return _map_local_order(row)
+
+    def fetch_fills(
+        self,
+        *,
+        since: datetime | None = None,
+        limit: int = 200,
+        symbol: str | None = None,
+    ) -> list[BrokerFill]:
+        del since, limit, symbol
+        return []
+
+    def get_liquidity_snapshot(self, symbol: str) -> LiquiditySnapshot | None:
+        price, as_of = self.store.latest_price(symbol)
+        if price is None:
+            return None
+        return LiquiditySnapshot(
+            symbol=symbol.upper().strip(),
+            bid_price=round(price * 0.9995, 4),
+            ask_price=round(price * 1.0005, 4),
+            bid_size=1000,
+            ask_size=1000,
+            last_price=round(price, 4),
+            as_of=as_of,
+            venue=self.settings_row.broker_venue,
+            raw={"provider": "india_paper"},
+        )
+
+
 @dataclass(slots=True)
 class RouteRequirements:
     instrument_class: InstrumentClass
@@ -643,8 +923,15 @@ class RouteRequirements:
 
 
 class ExecutionBrokerRouter:
-    def __init__(self, settings_row: BotSettings) -> None:
-        self._settings_row = settings_row
+    def __init__(self, session: Session | BotSettings | None, settings_row: BotSettings | None = None) -> None:
+        if settings_row is None:
+            if session is None:
+                raise TypeError("ExecutionBrokerRouter requires a BotSettings row.")
+            self._session = None
+            self._settings_row = session
+        else:
+            self._session = session if isinstance(session, Session) else None
+            self._settings_row = settings_row
         self._cache: dict[BrokerSlug, ExecutionAdapter] = {}
 
     def route(self, requirements: RouteRequirements) -> ExecutionAdapter:
@@ -667,6 +954,17 @@ class ExecutionBrokerRouter:
                 adapter = AlpacaExecutionAdapter(self._settings_row.mode)
                 self._cache[BrokerSlug.ALPACA] = adapter
             return adapter
+        if self._settings_row.broker_slug == BrokerSlug.INTERNAL_PAPER:
+            adapter = self._cache.get(BrokerSlug.INTERNAL_PAPER)
+            if adapter is None:
+                if self._session is None:
+                    raise BrokerAPIError(
+                        "India paper routing requires a database session.",
+                        category="routing",
+                    )
+                adapter = IndiaPaperExecutionAdapter(self._session, self._settings_row)
+                self._cache[BrokerSlug.INTERNAL_PAPER] = adapter
+            return adapter
 
         raise BrokerAPIError(
             f"Unsupported broker adapter: {self._settings_row.broker_slug.value}",
@@ -674,8 +972,8 @@ class ExecutionBrokerRouter:
         )
 
 
-def build_broker_adapter(settings_row: BotSettings) -> ExecutionAdapter:
-    router = ExecutionBrokerRouter(settings_row)
+def build_broker_adapter(session: Session | None, settings_row: BotSettings) -> ExecutionAdapter:
+    router = ExecutionBrokerRouter(session, settings_row)
     instrument_class = settings_row.instrument_class or InstrumentClass.CASH_EQUITY
     return router.route(RouteRequirements(instrument_class=instrument_class))
 
@@ -683,13 +981,55 @@ def build_broker_adapter(settings_row: BotSettings) -> ExecutionAdapter:
 def build_market_data_adapter(settings_row: BotSettings) -> MarketDataAdapter:
     if settings_row.broker_slug == BrokerSlug.ALPACA:
         return AlpacaMarketDataAdapter()
+    if settings_row.broker_slug == BrokerSlug.INTERNAL_PAPER:
+        return IndiaImportedMarketDataAdapter()
     raise RuntimeError(f"Unsupported market-data adapter: {settings_row.broker_slug.value}")
 
 
 def build_news_adapter(settings_row: BotSettings) -> NewsAdapter:
     if settings_row.broker_slug == BrokerSlug.ALPACA:
         return AlpacaNewsAdapter()
+    if settings_row.broker_slug == BrokerSlug.INTERNAL_PAPER:
+        return IndiaImportedNewsAdapter()
     raise RuntimeError(f"Unsupported news adapter: {settings_row.broker_slug.value}")
+
+
+def _sanitize_symbol_filename(symbol: str) -> str:
+    return "".join(char if char.isalnum() else "_" for char in symbol.upper().strip())
+
+
+def _bar_from_row(row: dict[str, Any]) -> BarPoint:
+    return BarPoint(
+        timestamp=_to_datetime(row.get("timestamp") or row.get("t")) or datetime.now(UTC),
+        open=_to_float(row.get("open") or row.get("o")),
+        high=_to_float(row.get("high") or row.get("h")),
+        low=_to_float(row.get("low") or row.get("l")),
+        close=_to_float(row.get("close") or row.get("c")),
+        volume=_to_float(row.get("volume") or row.get("v")),
+    )
+
+
+def _map_local_order(row) -> BrokerOrder:
+    return BrokerOrder(
+        broker_order_id=str(row.broker_order_id or f"local-{row.id}"),
+        client_order_id=row.client_order_id,
+        symbol=row.symbol,
+        side=row.direction,
+        order_type=row.order_type,
+        time_in_force=row.time_in_force,
+        quantity=row.quantity,
+        filled_quantity=row.filled_quantity,
+        average_fill_price=row.average_fill_price,
+        limit_price=row.limit_price,
+        stop_price=row.stop_price,
+        take_profit=row.take_profit,
+        trailing_percent=row.trailing_percent,
+        trailing_amount=row.trailing_amount,
+        status=row.status,
+        status_reason=row.status_reason,
+        updated_at=row.last_broker_update_at,
+        raw={"profile_id": row.profile_id, "order_id": row.id},
+    )
 
 
 def _to_float(value: Any, *, fallback: float = 0.0) -> float:

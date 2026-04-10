@@ -17,6 +17,7 @@ from tradingbot.services.adapters import (
     ExecutionAdapter,
     OrderRequest,
     ReplaceOrderRequest,
+    _to_datetime,
 )
 from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.contracts import ContractMasterService
@@ -92,19 +93,49 @@ STATE_TRANSITIONS: dict[OrderStatus | None, set[OrderStatus]] = {
 
 
 class ExecutionService:
-    def __init__(self, session: Session, broker: ExecutionAdapter) -> None:
+    def __init__(self, session: Session, broker: ExecutionAdapter, settings_row: BotSettings | None = None) -> None:
         self.session = session
         self.broker = broker
-        self.contract_master = ContractMasterService(session)
-        self.pretrade = PreTradeValidator(session, self.contract_master)
-        self.trade_reviews = TradeReviewService(session)
-        settings_row = self.session.get(BotSettings, 1)
+        if settings_row is None:
+            from tradingbot.services.store import ensure_bot_settings
+
+            settings_row = ensure_bot_settings(session)
+        self.settings_row = settings_row
+        self.profile_id = settings_row.id if settings_row is not None else None
+        self.contract_master = ContractMasterService(session, market_region=settings_row.market_region)
+        self.pretrade = PreTradeValidator(session, self.contract_master, profile_id=self.profile_id)
+        self.trade_reviews = TradeReviewService(session, profile_id=self.profile_id)
         default_venue = settings_row.broker_venue if settings_row is not None else "unknown"
         self.execution_quality = ExecutionQualityService(
             session,
             broker_slug=broker.broker_slug,
+            profile_id=self.profile_id,
             default_venue=default_venue,
         )
+
+    def _profile_order_query(self):
+        query = select(OrderRecord)
+        if self.profile_id is not None:
+            query = query.where(OrderRecord.profile_id == self.profile_id)
+        return query
+
+    def _profile_position_query(self):
+        query = select(PositionRecord)
+        if self.profile_id is not None:
+            query = query.where(PositionRecord.profile_id == self.profile_id)
+        return query
+
+    def _profile_fill_query(self):
+        query = select(OrderFill)
+        if self.profile_id is not None:
+            query = query.where(OrderFill.profile_id == self.profile_id)
+        return query
+
+    def _profile_intent_query(self):
+        query = select(ExecutionIntent)
+        if self.profile_id is not None:
+            query = query.where(ExecutionIntent.profile_id == self.profile_id)
+        return query
 
     def queue_trade_intent(
         self,
@@ -117,7 +148,9 @@ class ExecutionService:
         execution_allowed: bool,
         block_reason: str | None,
     ) -> ExecutionIntent:
-        intent = self.session.scalar(select(ExecutionIntent).where(ExecutionIntent.source_run_id == run_id))
+        intent = self.session.scalar(
+            self._profile_intent_query().where(ExecutionIntent.source_run_id == run_id)
+        )
         if intent is not None:
             return intent
 
@@ -126,6 +159,7 @@ class ExecutionService:
         intent_id = str(uuid4())
         intent = ExecutionIntent(
             id=intent_id,
+            profile_id=settings_row.id,
             source_run_id=run_id,
             intent_type=ExecutionIntentType.TRADE,
             mode=settings_row.mode,
@@ -151,6 +185,7 @@ class ExecutionService:
         self.session.add(intent)
         self.session.add(
             AuditLog(
+                profile_id=settings_row.id,
                 action="execution.intent_created",
                 actor="system",
                 actor_role="system",
@@ -177,6 +212,7 @@ class ExecutionService:
         intent.block_reason = None
         self.session.add(
             AuditLog(
+                profile_id=intent.profile_id,
                 action="execution.intent_approved",
                 actor=actor,
                 actor_role=actor_role,
@@ -204,6 +240,7 @@ class ExecutionService:
         intent.block_reason = reason
         self.session.add(
             AuditLog(
+                profile_id=intent.profile_id,
                 action="execution.intent_rejected",
                 actor=actor,
                 actor_role=actor_role,
@@ -218,7 +255,9 @@ class ExecutionService:
     def execute_intent(self, intent_id: str, *, settings_row: BotSettings) -> OrderRecord | None:
         intent = self._require_intent(intent_id)
         if intent.status == ExecutionIntentStatus.EXECUTED:
-            return self.session.scalar(select(OrderRecord).where(OrderRecord.execution_intent_id == intent.id))
+            return self.session.scalar(
+                self._profile_order_query().where(OrderRecord.execution_intent_id == intent.id)
+            )
         if intent.status != ExecutionIntentStatus.APPROVED:
             raise ValueError("Only approved intents can be executed.")
         if intent.intent_type != ExecutionIntentType.TRADE:
@@ -277,6 +316,7 @@ class ExecutionService:
         intent.last_error = None
         self.session.add(
             AuditLog(
+                profile_id=intent.profile_id,
                 action="execution.intent_executed",
                 actor="system",
                 actor_role="system",
@@ -302,6 +342,7 @@ class ExecutionService:
         if not execution_allowed:
             self.session.add(
                 RiskEvent(
+                    profile_id=self.profile_id,
                     symbol=decision.symbol,
                     severity="warning",
                     code="analysis_only_profile",
@@ -315,6 +356,7 @@ class ExecutionService:
         if risk_result.decision.value != "approved":
             self.session.add(
                 RiskEvent(
+                    profile_id=self.profile_id,
                     symbol=decision.symbol,
                     severity="warning",
                     code="risk_rejected",
@@ -340,6 +382,7 @@ class ExecutionService:
             observe_counter("execution.quality_rejected", tags={"symbol": decision.symbol})
             self.session.add(
                 RiskEvent(
+                    profile_id=self.profile_id,
                     symbol=decision.symbol,
                     severity="warning",
                     code="execution_quality_rejected",
@@ -374,6 +417,7 @@ class ExecutionService:
         if not pretrade_result.accepted:
             self.session.add(
                 RiskEvent(
+                    profile_id=self.profile_id,
                     symbol=decision.symbol,
                     severity="warning",
                     code="pretrade_rejected",
@@ -385,6 +429,7 @@ class ExecutionService:
             return None
 
         order = OrderRecord(
+            profile_id=self.profile_id,
             execution_intent_id=execution_intent_id,
             symbol=decision.symbol,
             mode=mode,
@@ -433,6 +478,7 @@ class ExecutionService:
             )
             self.session.add(
                 RiskEvent(
+                    profile_id=self.profile_id,
                     symbol=decision.symbol,
                     severity="critical",
                     code="broker_submit_failed",
@@ -445,6 +491,7 @@ class ExecutionService:
             return order
 
         self.apply_broker_order_update(order, broker_order, source="broker_submit")
+        self._ingest_immediate_broker_fill(order, broker_order, source="broker_submit")
         self.session.commit()
         self.session.refresh(order)
         return order
@@ -490,7 +537,7 @@ class ExecutionService:
     def cancel_all_open_orders(self) -> int:
         canceled_count = self.broker.cancel_all_orders()
         local_open_orders = self.session.scalars(
-            select(OrderRecord).where(OrderRecord.status.notin_(tuple(TERMINAL_STATUSES)))
+            self._profile_order_query().where(OrderRecord.status.notin_(tuple(TERMINAL_STATUSES)))
         ).all()
         for order in local_open_orders:
             self._transition_order(
@@ -541,16 +588,20 @@ class ExecutionService:
 
     def ingest_broker_fill(self, fill: BrokerFill, *, source: str) -> bool:
         if fill.broker_fill_id:
-            existing = self.session.scalar(select(OrderFill).where(OrderFill.broker_fill_id == fill.broker_fill_id))
+            existing = self.session.scalar(
+                self._profile_fill_query().where(OrderFill.broker_fill_id == fill.broker_fill_id)
+            )
             if existing is not None:
                 return False
 
         order = None
         if fill.broker_order_id:
-            order = self.session.scalar(select(OrderRecord).where(OrderRecord.broker_order_id == fill.broker_order_id))
+            order = self.session.scalar(
+                self._profile_order_query().where(OrderRecord.broker_order_id == fill.broker_order_id)
+            )
         if order is None:
             order = self.session.scalar(
-                select(OrderRecord)
+                self._profile_order_query()
                 .where(OrderRecord.symbol == fill.symbol)
                 .where(OrderRecord.status.notin_(tuple(TERMINAL_STATUSES)))
                 .order_by(OrderRecord.created_at.desc())
@@ -560,6 +611,7 @@ class ExecutionService:
 
         self.session.add(
             OrderFill(
+                profile_id=order.profile_id,
                 order_id=order.id,
                 broker_fill_id=fill.broker_fill_id,
                 broker_order_id=fill.broker_order_id,
@@ -608,7 +660,7 @@ class ExecutionService:
         return True
 
     def sync_positions_snapshot(self, broker_positions: list[BrokerPosition], *, source: str) -> None:
-        local_positions = self.session.scalars(select(PositionRecord)).all()
+        local_positions = self.session.scalars(self._profile_position_query()).all()
         local_by_symbol = {row.symbol: row for row in local_positions}
 
         seen_symbols: set[str] = set()
@@ -618,6 +670,7 @@ class ExecutionService:
             local = local_by_symbol.get(symbol)
             if local is None:
                 local = PositionRecord(
+                    profile_id=self.profile_id,
                     symbol=symbol,
                     quantity=broker_position.quantity,
                     average_entry_price=broker_position.average_entry_price,
@@ -645,14 +698,16 @@ class ExecutionService:
     def repair_broken_child_orders(self) -> int:
         repaired = 0
         parent_orders = self.session.scalars(
-            select(OrderRecord)
+            self._profile_order_query()
             .where(OrderRecord.order_type == OrderType.BRACKET)
             .where(OrderRecord.status.in_([OrderStatus.ACCEPTED, OrderStatus.PARTIALLY_FILLED, OrderStatus.FILLED]))
             .where(OrderRecord.filled_quantity > 0)
         ).all()
 
         for parent in parent_orders:
-            children = self.session.scalars(select(OrderRecord).where(OrderRecord.parent_order_id == parent.id)).all()
+            children = self.session.scalars(
+                self._profile_order_query().where(OrderRecord.parent_order_id == parent.id)
+            ).all()
             has_stop = any(child.order_type in {OrderType.STOP_MARKET, OrderType.STOP_LIMIT} for child in children)
             has_take_profit = any(child.order_type == OrderType.LIMIT for child in children)
 
@@ -700,12 +755,15 @@ class ExecutionService:
         session_id: str | None = None,
         reason: str = "manual_flatten",
     ) -> int:
-        local_positions = self.session.scalars(select(PositionRecord).where(PositionRecord.quantity > 0)).all()
+        local_positions = self.session.scalars(
+            self._profile_position_query().where(PositionRecord.quantity > 0)
+        ).all()
         flatten_submitted = self.broker.close_all_positions()
         for position in local_positions:
             self.session.delete(position)
         self.session.add(
             AuditLog(
+                profile_id=self.profile_id,
                 action="execution.flatten_all",
                 actor=actor,
                 actor_role=actor_role,
@@ -727,6 +785,7 @@ class ExecutionService:
         canceled_orders = self.cancel_all_open_orders()
         self.session.add(
             AuditLog(
+                profile_id=self.profile_id,
                 action="execution.broker_kill",
                 actor=actor,
                 actor_role=actor_role,
@@ -742,6 +801,7 @@ class ExecutionService:
             self.session.scalars(
             select(OrderStateTransition)
             .where(OrderStateTransition.order_id == order_id)
+            .where(OrderStateTransition.profile_id == self.profile_id)
             .order_by(OrderStateTransition.transition_at.asc())
             ).all()
         )
@@ -751,12 +811,15 @@ class ExecutionService:
             self.session.scalars(
             select(OrderFill)
             .where(OrderFill.order_id == order_id)
+            .where(OrderFill.profile_id == self.profile_id)
             .order_by(OrderFill.filled_at.asc())
             ).all()
         )
 
     def current_symbol_exposure(self, symbol: str) -> float:
-        position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == symbol.upper().strip()))
+        position = self.session.scalar(
+            self._profile_position_query().where(PositionRecord.symbol == symbol.upper().strip())
+        )
         return position.market_value if position else 0.0
 
     def execution_feedback_for_symbol(self, symbol: str) -> dict[str, object]:
@@ -767,13 +830,13 @@ class ExecutionService:
 
     def _require_order(self, order_id: int) -> OrderRecord:
         row = self.session.get(OrderRecord, order_id)
-        if row is None:
+        if row is None or (self.profile_id is not None and row.profile_id != self.profile_id):
             raise ValueError(f"Order {order_id} was not found.")
         return row
 
     def _require_intent(self, intent_id: str) -> ExecutionIntent:
         row = self.session.get(ExecutionIntent, intent_id)
-        if row is None:
+        if row is None or (self.profile_id is not None and row.profile_id != self.profile_id):
             raise ValueError(f"Execution intent {intent_id} was not found.")
         return row
 
@@ -784,6 +847,7 @@ class ExecutionService:
         observe_counter("execution.intent_blocked", tags={"mode": intent.mode.value})
         self.session.add(
             AuditLog(
+                profile_id=intent.profile_id,
                 action="execution.intent_blocked",
                 actor="system",
                 actor_role="system",
@@ -800,6 +864,7 @@ class ExecutionService:
         observe_counter("execution.intent_failed", tags={"mode": intent.mode.value})
         self.session.add(
             AuditLog(
+                profile_id=intent.profile_id,
                 action="execution.intent_failed",
                 actor="system",
                 actor_role="system",
@@ -813,6 +878,7 @@ class ExecutionService:
         client_order_id = f"child-{parent.id}-{uuid4().hex[:12]}"
         request.client_order_id = client_order_id
         local_child = OrderRecord(
+            profile_id=parent.profile_id,
             symbol=request.symbol,
             mode=parent.mode,
             direction=request.side,
@@ -859,6 +925,7 @@ class ExecutionService:
         if not force and to_status not in allowed:
             self.session.add(
                 RiskEvent(
+                    profile_id=order.profile_id,
                     symbol=order.symbol,
                     severity="warning",
                     code="order_invalid_transition",
@@ -875,6 +942,7 @@ class ExecutionService:
             return False
 
         transition = OrderStateTransition(
+            profile_id=order.profile_id,
             order_id=order.id,
             symbol=order.symbol,
             from_status=current_status,
@@ -892,7 +960,9 @@ class ExecutionService:
 
     def _apply_fill_to_position(self, symbol: str, quantity: int, price: float, side: str) -> None:
         normalized_symbol = symbol.upper().strip()
-        position = self.session.scalar(select(PositionRecord).where(PositionRecord.symbol == normalized_symbol))
+        position = self.session.scalar(
+            self._profile_position_query().where(PositionRecord.symbol == normalized_symbol)
+        )
         buy_fill = side.lower() == "buy"
 
         if position is None and not buy_fill:
@@ -900,6 +970,7 @@ class ExecutionService:
 
         if position is None:
             position = PositionRecord(
+                profile_id=self.profile_id,
                 symbol=normalized_symbol,
                 quantity=quantity,
                 average_entry_price=price,
@@ -925,8 +996,7 @@ class ExecutionService:
                 position.market_value = position.quantity * position.average_entry_price
 
     def _portfolio_risk_service(self) -> PortfolioRiskService:
-        settings_row = self.session.get(BotSettings, 1)
-        return PortfolioRiskService(self.session, risk_policy_from_settings(settings_row))
+        return PortfolioRiskService(self.session, risk_policy_from_settings(self.settings_row), profile_id=self.profile_id)
 
     def _safe_liquidity_snapshot(self, symbol: str):
         getter = getattr(self.broker, "get_liquidity_snapshot", None)
@@ -937,6 +1007,7 @@ class ExecutionService:
         except Exception as exc:  # noqa: BLE001
             self.session.add(
                 RiskEvent(
+                    profile_id=self.profile_id,
                     symbol=symbol,
                     severity="warning",
                     code="execution_liquidity_unavailable",
@@ -952,6 +1023,7 @@ class ExecutionService:
         except Exception as exc:  # noqa: BLE001
             self.session.add(
                 RiskEvent(
+                    profile_id=order.profile_id,
                     symbol=order.symbol,
                     severity="warning",
                     code="execution_quality_capture_failed",
@@ -959,6 +1031,34 @@ class ExecutionService:
                     payload={"order_id": order.id, "source": source, "error": str(exc)},
                 )
             )
+
+    def _ingest_immediate_broker_fill(self, order: OrderRecord, broker_order: BrokerOrder, *, source: str) -> None:
+        if broker_order.filled_quantity <= 0 or broker_order.average_fill_price is None:
+            return
+        fill_id = str(
+            broker_order.raw.get("fill_id")
+            or broker_order.raw.get("broker_fill_id")
+            or f"{broker_order.broker_order_id}-fill"
+        )
+        fill_time = _to_datetime(
+            broker_order.raw.get("filled_at")
+            or broker_order.raw.get("fill_time")
+            or broker_order.raw.get("updated_at")
+        ) or broker_order.updated_at or datetime.now(UTC)
+        self.ingest_broker_fill(
+            BrokerFill(
+                broker_fill_id=fill_id,
+                broker_order_id=broker_order.broker_order_id,
+                symbol=broker_order.symbol,
+                side=broker_order.side.value,
+                quantity=broker_order.filled_quantity,
+                price=broker_order.average_fill_price,
+                fee=0.0,
+                filled_at=fill_time,
+                raw=broker_order.raw,
+            ),
+            source=source,
+        )
 
 
 

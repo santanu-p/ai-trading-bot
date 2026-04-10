@@ -14,6 +14,7 @@ from tradingbot.schemas.trading import (
     BacktestSummaryResponse,
     BacktestTradeResponse,
 )
+from tradingbot.services.store import ensure_bot_settings
 from tradingbot.worker.tasks import enqueue_backtest
 
 router = APIRouter(tags=["backtests"])
@@ -22,6 +23,7 @@ router = APIRouter(tags=["backtests"])
 def _serialize_backtest_summary(row: BacktestReport) -> BacktestSummaryResponse:
     return BacktestSummaryResponse(
         id=row.id,
+        profile_id=row.profile_id,
         task_id=row.task_id,
         status=row.status,
         symbols=row.symbols,
@@ -61,12 +63,15 @@ def _serialize_backtest_detail(row: BacktestReport, trades: list[BacktestTrade])
 
 @router.get("/backtests", response_model=list[BacktestSummaryResponse])
 def list_backtests(
+    profile_id: int | None = Query(default=None, ge=1),
     status: str | None = None,
     limit: int = Query(default=20, ge=1, le=200),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> list[BacktestSummaryResponse]:
     query = select(BacktestReport).order_by(BacktestReport.created_at.desc())
+    if profile_id is not None:
+        query = query.where(BacktestReport.profile_id == profile_id)
     if status:
         query = query.where(BacktestReport.status == status)
     rows = session.scalars(query.limit(limit)).all()
@@ -83,7 +88,12 @@ def get_backtest_report(
     if report is None:
         raise HTTPException(status_code=404, detail=f"Backtest report {report_id} was not found.")
     trades = list(
-        session.scalars(select(BacktestTrade).where(BacktestTrade.report_id == report_id).order_by(BacktestTrade.signal_at.desc())).all()
+        session.scalars(
+            select(BacktestTrade)
+            .where(BacktestTrade.report_id == report_id)
+            .where(BacktestTrade.profile_id == report.profile_id)
+            .order_by(BacktestTrade.signal_at.desc())
+        ).all()
     )
     return _serialize_backtest_detail(report, trades)
 
@@ -97,8 +107,10 @@ def launch_backtest(
     normalized_symbols = [item.strip().upper() for item in payload.symbols if item.strip()]
     if not normalized_symbols:
         raise HTTPException(status_code=400, detail="At least one non-empty symbol is required.")
+    settings_row = ensure_bot_settings(session, profile_id=payload.profile_id)
 
     report = BacktestReport(
+        profile_id=settings_row.id,
         status="queued",
         symbols=normalized_symbols,
         start_at=payload.start,
@@ -119,6 +131,7 @@ def launch_backtest(
     report.task_id = task.id
     session.add(
         AuditLog(
+            profile_id=report.profile_id,
             action="backtest.queued",
             actor=current.email,
             actor_role=current.role.value,

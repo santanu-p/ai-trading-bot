@@ -19,6 +19,7 @@ import {
   listExecutionQualitySummary,
   getSettings,
   listAlerts,
+  listProfiles,
   listTradeReviews,
   launchBacktest,
   listAuditLogs,
@@ -61,6 +62,7 @@ import type {
   ExecutionIntentResponse,
   LiveEnablePrepareResponse,
   LoginResponse,
+  MarketProfileSummaryResponse,
   OrderStatus,
   OrderFillResponse,
   OrderResponse,
@@ -175,8 +177,9 @@ function toLocalDateTimeInput(value: Date) {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
-function buildBacktestPayload(draft: BacktestDraft): BacktestRequestPayload {
+function buildBacktestPayload(draft: BacktestDraft, profileId: number): BacktestRequestPayload {
   return {
+    profile_id: profileId,
     symbols: draft.symbols
       .split(",")
       .map((item) => item.trim().toUpperCase())
@@ -196,6 +199,11 @@ function buildBacktestPayload(draft: BacktestDraft): BacktestRequestPayload {
 
 function buildSettingsPayload(draft: BotSettingsResponse): BotSettingsUpdatePayload {
   return {
+    display_name: draft.display_name,
+    enabled: draft.enabled,
+    enabled_exchanges: draft.enabled_exchanges,
+    benchmark_symbols: draft.benchmark_symbols,
+    news_optional: draft.news_optional,
     scan_interval_minutes: draft.scan_interval_minutes,
     consensus_threshold: draft.consensus_threshold,
     max_open_positions: draft.max_open_positions,
@@ -225,6 +233,10 @@ function buildSettingsPayload(draft: BotSettingsResponse): BotSettingsUpdatePayl
     broker_settings: draft.broker_settings,
     selected_for_analysis: draft.selected_for_analysis
   };
+}
+
+function profileLabel(profile: MarketProfileSummaryResponse) {
+  return `${profile.display_name} (${profile.market_region})`;
 }
 
 function renderProfileScope(profile: TradingProfile | null | undefined) {
@@ -323,6 +335,8 @@ export function DashboardScreen({ section }: Props) {
   const [flash, setFlash] = useState<{ tone: "error" | "info"; text: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [profiles, setProfiles] = useState<MarketProfileSummaryResponse[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
   const [filterInput, setFilterInput] = useState("");
   const [settingsDraft, setSettingsDraft] = useState<BotSettingsResponse | null>(null);
   const [settingsData, setSettingsData] = useState<BotSettingsResponse | null>(null);
@@ -378,6 +392,8 @@ export function DashboardScreen({ section }: Props) {
   const isAdmin = operator?.role === "admin";
 
   function clearDashboardState() {
+    setProfiles([]);
+    setSelectedProfileId(null);
     setSettingsDraft(null);
     setSettingsData(null);
     setRuns([]);
@@ -470,7 +486,23 @@ export function DashboardScreen({ section }: Props) {
     setSelectedBacktest(detail);
   }
 
-  async function loadDashboardData(resetDraft = false) {
+  async function loadDashboardData(resetDraft = false, requestedProfileId: number | null = selectedProfileId) {
+    const profilesResponse = await listProfiles();
+    const resolvedProfileId =
+      requestedProfileId ??
+      profilesResponse.find((profile) => profile.is_default)?.profile_id ??
+      profilesResponse[0]?.profile_id ??
+      null;
+
+    setProfiles(profilesResponse);
+    if (!resolvedProfileId) {
+      clearDashboardState();
+      return;
+    }
+    if (selectedProfileId !== resolvedProfileId) {
+      setSelectedProfileId(resolvedProfileId);
+    }
+
     const [
       settingsResponse,
       runsResponse,
@@ -490,27 +522,28 @@ export function DashboardScreen({ section }: Props) {
       tradeReviewSummaryResponse,
       backtestsResponse
     ] = await Promise.all([
-      getSettings(),
-      listRuns(),
-      listDecisions(),
-      listExecutionIntents(undefined, 24),
-      listOrders(),
-      listPositions(),
-      listRiskEvents(),
-      listAlerts(16),
-      getPerformanceSummary(60),
+      getSettings(resolvedProfileId),
+      listRuns({ profileId: resolvedProfileId }),
+      listDecisions({ profileId: resolvedProfileId }),
+      listExecutionIntents(undefined, 24, resolvedProfileId),
+      listOrders({ profileId: resolvedProfileId }),
+      listPositions({ profileId: resolvedProfileId }),
+      listRiskEvents({ profileId: resolvedProfileId }),
+      listAlerts(16, resolvedProfileId),
+      getPerformanceSummary(60, resolvedProfileId),
       listExecutionQualitySamples(
         executionFilters.sampleSymbol || undefined,
         executionFilters.sampleStatus === "all" ? undefined : executionFilters.sampleStatus,
-        executionFilters.sampleLimit
+        executionFilters.sampleLimit,
+        resolvedProfileId
       ),
-      listExecutionQualitySummary(executionFilters.summaryDimension, executionFilters.summaryLimit),
-      listReconciliationMismatches(),
-      listAuditLogs(24),
+      listExecutionQualitySummary(executionFilters.summaryDimension, executionFilters.summaryLimit, resolvedProfileId),
+      listReconciliationMismatches(resolvedProfileId),
+      listAuditLogs(24, resolvedProfileId),
       listSessions(),
-      listTradeReviews(undefined, 12),
-      summarizeTradeReviews(12),
-      listBacktests(undefined, 24)
+      listTradeReviews(undefined, 12, resolvedProfileId),
+      summarizeTradeReviews(12, resolvedProfileId),
+      listBacktests(undefined, 24, resolvedProfileId)
     ]);
 
     setSettingsData(settingsResponse);
@@ -658,13 +691,14 @@ export function DashboardScreen({ section }: Props) {
       return;
     }
 
+    const profileId = selectedProfileId ?? settingsData?.profile_id ?? null;
     const closeStream = openOperationsStream(handleOperationsSnapshot, (status) => {
       setStreamState(status === "closed" ? "idle" : status);
-    });
+    }, profileId);
     return () => {
       closeStream();
     };
-  }, [operator, handleOperationsSnapshot]);
+  }, [operator, handleOperationsSnapshot, selectedProfileId, settingsData?.profile_id]);
 
   function applyExecutionQualityFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -769,14 +803,19 @@ export function DashboardScreen({ section }: Props) {
     if (!settingsDraft) {
       return Promise.resolve();
     }
-    return updateSettings(buildSettingsPayload(settingsDraft));
+    return updateSettings(settingsDraft.profile_id, buildSettingsPayload(settingsDraft));
   }
 
   async function handlePrepareLive() {
+    const profileId = selectedProfileId ?? settingsData?.profile_id ?? null;
+    if (!profileId) {
+      setFlash({ tone: "error", text: "Select a profile before preparing live enablement." });
+      return;
+    }
     setBusy(true);
     setFlash(null);
     try {
-      const response = await prepareLiveEnablement();
+      const response = await prepareLiveEnablement(profileId);
       setLiveApproval(response);
       setLiveApprovalCode(response.approval_code);
       setFlash({ tone: "info", text: "Live enablement code generated. Confirm it below before live approval." });
@@ -789,11 +828,16 @@ export function DashboardScreen({ section }: Props) {
   }
 
   function handleEnableLive() {
+    const profileId = selectedProfileId ?? liveApproval?.profile_id ?? settingsData?.profile_id ?? null;
+    if (!profileId) {
+      setFlash({ tone: "error", text: "Select a profile before enabling live execution." });
+      return;
+    }
     if (!liveApprovalCode.trim()) {
       setFlash({ tone: "error", text: "Enter the approval code before enabling live execution." });
       return;
     }
-    handleCommand(() => enableLiveExecution(liveApprovalCode.trim()), {
+    handleCommand(() => enableLiveExecution(liveApprovalCode.trim(), profileId), {
       resetDraft: true,
       success: "Live execution enabled."
     });
@@ -819,10 +863,15 @@ export function DashboardScreen({ section }: Props) {
   }
 
   async function handleLaunchBacktest() {
+    const profileId = selectedProfileId ?? settingsData?.profile_id ?? null;
+    if (!profileId) {
+      setFlash({ tone: "error", text: "Select a market profile before launching a backtest." });
+      return;
+    }
     setBusy(true);
     setFlash(null);
     try {
-      const payload = buildBacktestPayload(backtestDraft);
+      const payload = buildBacktestPayload(backtestDraft, profileId);
       if (payload.symbols.length === 0) {
         setFlash({ tone: "error", text: "Enter at least one symbol for backtesting." });
         return;
@@ -891,6 +940,8 @@ export function DashboardScreen({ section }: Props) {
   const approvedDecisions = decisions.filter((decision) => decision.status === "approved").length;
   const unresolvedMismatchCount = mismatches.filter((item) => !item.resolved).length;
   const pendingIntentCount = executionIntents.filter((intent) => intent.status === "pending_approval").length;
+  const activeProfileId = selectedProfileId ?? settingsData?.profile_id ?? null;
+  const activeProfile = profiles.find((profile) => profile.profile_id === activeProfileId) ?? null;
   const intakeRequired = Boolean(settingsData && !settingsData.strategy_profile_completed);
   const supportState = settingsData ? executionSupportCopy[settingsData.execution_support_status] : null;
   const liveStartBlocked = Boolean(settingsData?.mode === "live" && !settingsData.live_start_allowed);
@@ -914,6 +965,17 @@ export function DashboardScreen({ section }: Props) {
         : settingsData?.execution_support_status === "analysis_only_for_selected_broker"
           ? "Start analysis mode"
           : "Start bot";
+
+  function handleProfileSelection(nextProfileId: number) {
+    if (nextProfileId === activeProfileId) {
+      return;
+    }
+    setSelectedProfileId(nextProfileId);
+    setLiveApproval(null);
+    setLiveApprovalCode("");
+    setSelectedOrderId(null);
+    setSelectedBacktestId(null);
+  }
 
   return (
     <div className="workspace-shell">
@@ -965,14 +1027,14 @@ export function DashboardScreen({ section }: Props) {
           <button
             className="primary-button"
             disabled={busy || !canOperate || intakeRequired || liveStartBlocked}
-            onClick={() => handleCommand(() => startBot(), { success: "Bot started." })}
+            onClick={() => handleCommand(() => startBot(activeProfileId), { success: "Bot started." })}
           >
             {startButtonLabel}
           </button>
           <button
             className="secondary-button"
             disabled={busy || !canOperate}
-            onClick={() => handleCommand(() => stopBot(), { success: "Bot stopped." })}
+            onClick={() => handleCommand(() => stopBot(activeProfileId), { success: "Bot stopped." })}
           >
             Stop bot
           </button>
@@ -986,7 +1048,7 @@ export function DashboardScreen({ section }: Props) {
               Boolean(switchingToLive && !settingsData?.live_start_allowed)
             }
             onClick={() =>
-              handleCommand(() => switchMode(settingsData?.mode === "paper" ? "live" : "paper"), {
+              handleCommand(() => switchMode(settingsData?.mode === "paper" ? "live" : "paper", activeProfileId), {
                 success: "Bot mode updated."
               })
             }
@@ -997,7 +1059,7 @@ export function DashboardScreen({ section }: Props) {
             className="ghost-button"
             disabled={busy || !settingsData || !canOperate}
             onClick={() =>
-              handleCommand(() => toggleKillSwitch(!(settingsData?.kill_switch_enabled ?? false)), {
+              handleCommand(() => toggleKillSwitch(!(settingsData?.kill_switch_enabled ?? false), activeProfileId), {
                 success: "Kill switch updated."
               })
             }
@@ -1007,21 +1069,21 @@ export function DashboardScreen({ section }: Props) {
           <button
             className="ghost-button"
             disabled={busy || !settingsData || !canOperate}
-            onClick={() => handleCommand(() => runReconciliation(), { success: "Reconciliation finished." })}
+            onClick={() => handleCommand(() => runReconciliation(activeProfileId), { success: "Reconciliation finished." })}
           >
             Reconcile now
           </button>
           <button
             className="ghost-button"
             disabled={busy || !settingsData || !canOperate}
-            onClick={() => handleCommand(() => cancelAllOrders(), { success: "Cancel-all request submitted." })}
+            onClick={() => handleCommand(() => cancelAllOrders(activeProfileId), { success: "Cancel-all request submitted." })}
           >
             Cancel all open orders
           </button>
           <button
             className="ghost-button"
             disabled={busy || !settingsData || !canOperate}
-            onClick={() => handleCommand(() => flattenAllPositions(), { success: "Flatten-all request submitted." })}
+            onClick={() => handleCommand(() => flattenAllPositions(activeProfileId), { success: "Flatten-all request submitted." })}
           >
             Flatten all
           </button>
@@ -1048,8 +1110,33 @@ export function DashboardScreen({ section }: Props) {
           <div>
             <p className="eyebrow">Operator surface</p>
             <h2>{intakeRequired ? "Agent intake" : sections.find((item) => item.key === section)?.label}</h2>
+            {activeProfile ? (
+              <p className="muted">
+                {profileLabel(activeProfile)} | exchanges {activeProfile.enabled_exchanges.join(", ") || "not configured"}
+              </p>
+            ) : null}
           </div>
           <div className="header-actions">
+            <label className="account-chip">
+              <strong>Market profile</strong>
+              <select
+                className="filter-input"
+                disabled={profiles.length === 0}
+                value={activeProfileId?.toString() ?? ""}
+                onChange={(event) => {
+                  const nextProfileId = Number(event.target.value);
+                  if (Number.isFinite(nextProfileId) && nextProfileId > 0) {
+                    handleProfileSelection(nextProfileId);
+                  }
+                }}
+              >
+                {profiles.map((profile) => (
+                  <option key={profile.profile_id} value={profile.profile_id}>
+                    {profileLabel(profile)}
+                  </option>
+                ))}
+              </select>
+            </label>
             <div className="account-chip">
               <strong>{operator.email}</strong>
               <span>
@@ -2350,14 +2437,16 @@ export function DashboardScreen({ section }: Props) {
                 <button
                   className="ghost-button"
                   disabled={busy || !isAdmin || !settingsData?.live_enabled}
-                  onClick={() => handleCommand(() => disableLiveExecution(), { success: "Live execution disabled." })}
+                  onClick={() =>
+                    handleCommand(() => disableLiveExecution(activeProfileId), { success: "Live execution disabled." })
+                  }
                 >
                   Disable live
                 </button>
                 <button
                   className="ghost-button"
                   disabled={busy || !canOperate}
-                  onClick={() => handleCommand(() => brokerKill(), { success: "Broker kill activated." })}
+                  onClick={() => handleCommand(() => brokerKill(activeProfileId), { success: "Broker kill activated." })}
                 >
                   Broker kill
                 </button>
@@ -2439,7 +2528,7 @@ export function DashboardScreen({ section }: Props) {
             <section className="panel settings-panel">
               <div className="panel-heading">
                 <h3>Bot settings</h3>
-                <p>Consensus, risk budgets, cadence, watchlist symbols, and the saved agent intake.</p>
+                <p>Profile identity, exchange coverage, risk budgets, cadence, watchlists, and the saved agent intake.</p>
               </div>
               <AgentIntake
                 profile={settingsDraft.selected_for_analysis}
@@ -2451,6 +2540,42 @@ export function DashboardScreen({ section }: Props) {
                 description="These broker and profile settings define both the research brief and the subset that can be executed."
               />
               <div className="settings-grid">
+                <label>
+                  Profile name
+                  <input
+                    type="text"
+                    value={settingsDraft.display_name}
+                    onChange={(event) => setSettingsDraft({ ...settingsDraft, display_name: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Region
+                  <input type="text" value={settingsDraft.market_region} readOnly />
+                </label>
+                <label>
+                  Execution provider
+                  <input type="text" value={settingsDraft.execution_provider_kind} readOnly />
+                </label>
+                <label>
+                  Data provider
+                  <input type="text" value={settingsDraft.data_provider_kind} readOnly />
+                </label>
+                <label>
+                  Profile enabled
+                  <input
+                    type="checkbox"
+                    checked={settingsDraft.enabled}
+                    onChange={(event) => setSettingsDraft({ ...settingsDraft, enabled: event.target.checked })}
+                  />
+                </label>
+                <label>
+                  News optional
+                  <input
+                    type="checkbox"
+                    checked={settingsDraft.news_optional}
+                    onChange={(event) => setSettingsDraft({ ...settingsDraft, news_optional: event.target.checked })}
+                  />
+                </label>
                 <label>
                   Scan interval
                   <input
@@ -2534,6 +2659,38 @@ export function DashboardScreen({ section }: Props) {
                   />
                 </label>
               </div>
+              <label className="watchlist-field">
+                Enabled exchanges
+                <textarea
+                  value={settingsDraft.enabled_exchanges.join(", ")}
+                  onChange={(event) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      enabled_exchanges: event.target.value
+                        .split(",")
+                        .map((item) => item.trim().toUpperCase())
+                        .filter(Boolean)
+                    })
+                  }
+                  placeholder="NSE, BSE, MCX"
+                />
+              </label>
+              <label className="watchlist-field">
+                Benchmark symbols
+                <textarea
+                  value={settingsDraft.benchmark_symbols.join(", ")}
+                  onChange={(event) =>
+                    setSettingsDraft({
+                      ...settingsDraft,
+                      benchmark_symbols: event.target.value
+                        .split(",")
+                        .map((item) => item.trim().toUpperCase())
+                        .filter(Boolean)
+                    })
+                  }
+                  placeholder="SPY, QQQ or NIFTY 50, BANKNIFTY"
+                />
+              </label>
               <label className="watchlist-field">
                 Watchlist
                 <textarea
