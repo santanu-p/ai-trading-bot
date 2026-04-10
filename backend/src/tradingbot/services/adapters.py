@@ -924,13 +924,17 @@ class RouteRequirements:
 
 class ExecutionBrokerRouter:
     def __init__(self, session: Session | BotSettings | None, settings_row: BotSettings | None = None) -> None:
+        self._session: Session | None
+        self._settings_row: BotSettings
         if settings_row is None:
-            if session is None:
+            if session is None or isinstance(session, Session):
                 raise TypeError("ExecutionBrokerRouter requires a BotSettings row.")
             self._session = None
             self._settings_row = session
         else:
-            self._session = session if isinstance(session, Session) else None
+            if session is not None and not isinstance(session, Session):
+                raise TypeError("ExecutionBrokerRouter session must be a SQLAlchemy Session or None.")
+            self._session = session
             self._settings_row = settings_row
         self._cache: dict[BrokerSlug, ExecutionAdapter] = {}
 

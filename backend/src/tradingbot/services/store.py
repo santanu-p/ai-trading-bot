@@ -71,7 +71,7 @@ def _seed_profile(
 
 
 def ensure_market_profiles(session: Session) -> list[BotSettings]:
-    rows = session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+    rows = list(session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all())
     defaults = get_settings()
     if not rows:
         session.add_all(
@@ -105,7 +105,7 @@ def ensure_market_profiles(session: Session) -> list[BotSettings]:
             ]
         )
         session.commit()
-        return session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+        return list(session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all())
 
     changed = False
     by_key = {row.profile_key: row for row in rows if row.profile_key}
@@ -148,7 +148,7 @@ def ensure_market_profiles(session: Session) -> list[BotSettings]:
 
     if changed:
         session.commit()
-        rows = session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+        rows = list(session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all())
     return rows
 
 
@@ -174,14 +174,16 @@ def ensure_bot_settings(
 
 def list_market_profiles(session: Session) -> list[BotSettings]:
     ensure_market_profiles(session)
-    return session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all()
+    return list(session.scalars(select(BotSettings).order_by(BotSettings.id.asc())).all())
 
 
 def list_enabled_profiles(session: Session) -> list[BotSettings]:
     ensure_market_profiles(session)
-    return session.scalars(
+    return list(
+        session.scalars(
         select(BotSettings).where(BotSettings.enabled.is_(True)).order_by(BotSettings.id.asc())
-    ).all()
+        ).all()
+    )
 
 
 def replace_watchlist(session: Session, settings_row: BotSettings, symbols: list[str]) -> list[WatchlistSymbol]:

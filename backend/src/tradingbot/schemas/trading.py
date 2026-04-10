@@ -224,6 +224,7 @@ class PerformanceSummaryResponse(BaseModel):
 class ExecutionQualitySampleResponse(BaseModel):
     id: int
     order_id: int
+    profile_id: int
     symbol: str
     broker_slug: str
     venue: str
