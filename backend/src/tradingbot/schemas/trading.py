@@ -399,6 +399,31 @@ class TradeReviewSummaryResponse(BaseModel):
     loss_causes: dict[str, int]
 
 
+class MarketEfficiencyReportResponse(BaseModel):
+    window_minutes: int
+    trade_candidates: int
+    approved_candidates: int
+    rejected_candidates: int
+    approval_rate: float
+    rejection_codes: dict[str, int]
+    execution_quality: dict[str, Any]
+    post_trade_reviews: dict[str, Any]
+    recommendations: list[str]
+
+
+class DecisionAuditResponse(BaseModel):
+    run_id: str
+    profile_id: int
+    symbol: str
+    status: str
+    confidence: float
+    model_name: str | None = None
+    prompt_versions: dict[str, str]
+    score: float
+    issues: list[str]
+    created_at: datetime
+
+
 class BacktestDetailResponse(BacktestSummaryResponse):
     metrics: dict
     walk_forward: list[dict]

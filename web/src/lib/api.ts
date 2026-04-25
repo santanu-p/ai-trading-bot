@@ -8,11 +8,13 @@ import type {
   BotSettingsUpdatePayload,
   BotSettingsResponse,
   CommitteeDecision,
+  DecisionAuditResponse,
   ExecutionQualitySampleResponse,
   ExecutionQualitySummaryResponse,
   ExecutionIntentResponse,
   LiveEnablePrepareResponse,
   LoginResponse,
+  MarketEfficiencyReportResponse,
   MarketProfileSummaryResponse,
   OrderFillResponse,
   OrderResponse,
@@ -285,6 +287,18 @@ export async function listTradeReviews(status?: string, limit = 20, profileId?: 
 export async function summarizeTradeReviews(limit = 50, profileId?: number | null) {
   return request<TradeReviewSummaryResponse[]>(
     withProfile(`/trade-reviews/summary?limit=${String(limit)}`, profileId)
+  );
+}
+
+export async function getRiskCalibrationReport(windowMinutes = 24 * 60, profileId?: number | null) {
+  return request<MarketEfficiencyReportResponse>(
+    withProfile(`/risk/calibration?window_minutes=${String(windowMinutes)}`, profileId)
+  );
+}
+
+export async function listDecisionAudits(limit = 50, profileId?: number | null) {
+  return request<DecisionAuditResponse[]>(
+    withProfile(`/ai/decision-audit?limit=${String(limit)}`, profileId)
   );
 }
 

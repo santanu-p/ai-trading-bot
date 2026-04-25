@@ -37,6 +37,7 @@ Use the kill switch when:
 - `risk_rejected`
 - `pretrade_rejected`
 - `broker_submit_failed`
+- `broker_stream_unknown_order`
 - `reconciliation_unresolved`
 - `alert_worker_failures`
 - `alert_high_rejection_rate`
@@ -74,5 +75,5 @@ See [setup.md](setup.md) for the exact local commands and [release-governance.md
 
 - no externalized metrics/trace sink (telemetry is currently in-process only)
 - webhook alert delivery is generic only; managed pager/on-call routing is still external
-- the dashboard has a backend SSE stream, but broker-native event ingestion is still not wired
+- the dashboard has a backend SSE stream, and broker trade-update payloads now have a repo-local parser/ingestion path; a long-running broker websocket supervisor still needs hosted deployment wiring
 - backup/PITR, restore drills, and queue-loss expectations still depend on hosted platform configuration

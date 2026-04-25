@@ -115,6 +115,15 @@ class BrokerFill:
 
 
 @dataclass(slots=True)
+class BrokerOrderEvent:
+    event_id: str
+    event_type: str
+    order: BrokerOrder | None = None
+    fill: BrokerFill | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class BrokerPosition:
     broker_position_id: str
     symbol: str
@@ -1089,6 +1098,39 @@ def _normalize_alpaca_error(code: int, payload: dict[str, Any]) -> BrokerAPIErro
     if "INSUFFICIENT" in upper_message or "BUYING POWER" in upper_message:
         return BrokerAPIError(message, code=code, category="capital", payload=payload)
     return BrokerAPIError(message, code=code, category="broker_error", payload=payload)
+
+
+def map_alpaca_trade_update(payload: dict[str, Any]) -> BrokerOrderEvent:
+    order_payload = payload.get("order")
+    broker_order = _map_alpaca_order(order_payload) if isinstance(order_payload, dict) else None
+    event_type = str(payload.get("event") or payload.get("event_type") or "unknown")
+    event_id = str(
+        payload.get("execution_id")
+        or payload.get("event_id")
+        or payload.get("id")
+        or (broker_order.broker_order_id if broker_order is not None else "")
+    )
+    fill: BrokerFill | None = None
+    if broker_order is not None and event_type in {"fill", "partial_fill"}:
+        filled_at = _to_datetime(payload.get("timestamp") or payload.get("filled_at")) or broker_order.updated_at or datetime.now(UTC)
+        fill = BrokerFill(
+            broker_fill_id=event_id,
+            broker_order_id=broker_order.broker_order_id,
+            symbol=broker_order.symbol,
+            side=broker_order.side.value,
+            quantity=int(abs(_to_float(payload.get("qty"), fallback=broker_order.filled_quantity))),
+            price=_to_float(payload.get("price"), fallback=broker_order.average_fill_price or 0.0),
+            fee=_to_float(payload.get("fee"), fallback=0.0),
+            filled_at=filled_at,
+            raw=payload,
+        )
+    return BrokerOrderEvent(
+        event_id=event_id or f"alpaca-{event_type}",
+        event_type=event_type,
+        order=broker_order,
+        fill=fill,
+        raw=payload,
+    )
 
 
 def _map_alpaca_order(payload: dict[str, Any]) -> BrokerOrder:

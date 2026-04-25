@@ -13,6 +13,7 @@ from tradingbot.services.adapters import (
     BrokerFill,
     BrokerAPIError,
     BrokerOrder,
+    BrokerOrderEvent,
     BrokerPosition,
     ExecutionAdapter,
     OrderRequest,
@@ -586,6 +587,76 @@ class ExecutionService:
 
         return changed
 
+    def ingest_broker_stream_event(self, event: BrokerOrderEvent) -> dict[str, int]:
+        report = {"events": 1, "order_updates": 0, "fills_ingested": 0, "unknown_orders": 0}
+        order = None
+        if event.order is not None:
+            if event.order.broker_order_id:
+                order = self.session.scalar(
+                    self._profile_order_query().where(OrderRecord.broker_order_id == event.order.broker_order_id)
+                )
+            if order is None and event.order.client_order_id:
+                order = self.session.scalar(
+                    self._profile_order_query().where(OrderRecord.client_order_id == event.order.client_order_id)
+                )
+
+        if order is None and event.fill is not None and event.fill.broker_order_id:
+            order = self.session.scalar(
+                self._profile_order_query().where(OrderRecord.broker_order_id == event.fill.broker_order_id)
+            )
+
+        if order is None:
+            symbol = event.order.symbol if event.order is not None else event.fill.symbol if event.fill is not None else None
+            broker_reference = (
+                event.order.broker_order_id
+                if event.order is not None
+                else event.fill.broker_order_id
+                if event.fill is not None
+                else None
+            )
+            self.session.add(
+                RiskEvent(
+                    profile_id=self.profile_id,
+                    symbol=symbol,
+                    severity="critical",
+                    code="broker_stream_unknown_order",
+                    message="Broker stream event could not be matched to a local order.",
+                    payload={
+                        "event_id": event.event_id,
+                        "event_type": event.event_type,
+                        "broker_order_id": broker_reference,
+                    },
+                )
+            )
+            report["unknown_orders"] = 1
+            self.session.commit()
+            return report
+
+        if event.order is not None:
+            changed = self.apply_broker_order_update(order, event.order, source="broker_stream")
+            report["order_updates"] = int(changed or event.order.status == order.status)
+
+        if event.fill is not None:
+            report["fills_ingested"] = int(self.ingest_broker_fill(event.fill, source="broker_stream"))
+
+        self.session.add(
+            AuditLog(
+                profile_id=order.profile_id,
+                action="broker.stream_event",
+                actor="system",
+                actor_role="system",
+                details={
+                    "event_id": event.event_id,
+                    "event_type": event.event_type,
+                    "broker_order_id": order.broker_order_id,
+                    "order_updates": report["order_updates"],
+                    "fills_ingested": report["fills_ingested"],
+                },
+            )
+        )
+        self.session.commit()
+        return report
+
     def ingest_broker_fill(self, fill: BrokerFill, *, source: str) -> bool:
         if fill.broker_fill_id:
             existing = self.session.scalar(
@@ -1020,6 +1091,7 @@ class ExecutionService:
     def _record_execution_sample(self, order: OrderRecord, *, source: str) -> None:
         try:
             self.execution_quality.upsert_order_sample(order)
+            self.session.flush()
         except Exception as exc:  # noqa: BLE001
             self.session.add(
                 RiskEvent(

@@ -18,6 +18,18 @@ Each entry is expected to carry replay evidence and rollback notes.
 
 ## Releases
 
+### Release ID: phase11-market-efficiency-ops-v1
+
+- Date (UTC): 2026-04-25
+- Scope: broker stream ingestion hooks, market-efficiency reporting, AI decision audit scoring, and stream-failure injection coverage
+- Prompt/version changes: none
+- Risk-rule changes: no threshold changes; added risk calibration reporting over approvals, rejects, execution quality, and post-trade review pressure
+- Execution-behavior changes: Alpaca trade-update payloads can now be mapped into broker stream events, and stream events update local orders/fills through the existing execution service while unmatched broker events emit critical risk events
+- Threshold/config changes: none
+- Replay evidence: focused phase 11 coverage in [backend/tests/test_phase11_market_efficiency.py](../backend/tests/test_phase11_market_efficiency.py); full backend verification passed with `55 passed, 4 skipped`
+- Rollback plan: remove the broker stream event mapper/ingestion method, disable the `/risk/calibration` and `/ai/decision-audit` endpoints, and revert the phase 11 tests if the reporting or stream-ingestion path interferes with operator workflows
+- Approver: admin operator
+
 ### Release ID: phase10-control-plane-ops-v1
 
 - Date (UTC): 2026-04-09

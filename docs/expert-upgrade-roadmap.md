@@ -26,7 +26,8 @@ Additional repo-local status note as of 2026-04-09:
 - alert webhook dispatch and dashboard-facing SSE operations streaming are now in the repo
 - the dashboard now renders open risk budget, trade-review queues, prompt attribution, and committee disagreement summaries
 - release-governance docs, a PR evidence template, and a release-guard workflow are now in the repo
-- the main remaining gaps after these additions are hosted branch-protection enforcement, broader replay failure injection, release rollout controls across environments, multi-market broker expansion, and direct broker-native streaming
+- broker stream event parsing/ingestion hooks, market-efficiency reporting, AI decision audit scoring, and stream failure-injection tests are now in the repo
+- the main remaining gaps after these additions are hosted branch-protection enforcement, release rollout controls across environments, multi-market broker expansion, and a hosted long-running broker websocket supervisor
 
 ## Critical Scope Decision
 
@@ -62,8 +63,8 @@ Current repo reality after Phases 0-9:
 - The core order lifecycle, reconciliation, execution-quality/TCA, observability, and release-discipline baselines are implemented.
 - Broker/profile capability gating is explicit, and unsupported selections are analysis-only by design.
 - Execution remains intentionally focused on the currently supported US cash-equity workflow; futures/options are not yet executable in this repo.
-- The largest remaining gaps are multi-market broker expansion, advanced operator analytics depth, realtime event streaming, and production hardening controls.
-- Repo-local operator analytics depth and backend event-stream transport have improved, but direct broker-native streaming and hosted production controls still remain.
+- The largest remaining gaps are multi-market broker expansion, hosted realtime broker stream supervision, and production hardening controls.
+- Repo-local operator analytics depth, backend event-stream transport, and broker stream ingestion hooks have improved, but hosted websocket supervision and hosted production controls still remain.
 
 ## Priority Order
 
@@ -904,6 +905,8 @@ If the goal is maximum improvement for the next development cycle, do these firs
 3. Add release-level controls for strategy/risk threshold rollout and rollback auditability across staged environments.
 4. Expand multi-market broker coverage beyond executable US cash equities.
 5. Add direct broker-native streaming or tighter sub-second state convergence beyond the current backend SSE layer.
+
+For the complete Phase 10+ roadmap covering infrastructure, observability, multi-market expansion, advanced AI, and operational maturity, see [future-upgrades-roadmap.md](future-upgrades-roadmap.md).
 
 ## Definition Of "Expert" For This Repo
 

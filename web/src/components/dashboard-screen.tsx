@@ -15,6 +15,8 @@ import {
   getBacktestReport,
   getCurrentSession,
   getPerformanceSummary,
+  getRiskCalibrationReport,
+  listDecisionAudits,
   listExecutionQualitySamples,
   listExecutionQualitySummary,
   getSettings,
@@ -57,11 +59,13 @@ import type {
   BotSettingsUpdatePayload,
   BrokerSettings,
   CommitteeDecision,
+  DecisionAuditResponse,
   ExecutionQualitySampleResponse,
   ExecutionQualitySummaryResponse,
   ExecutionIntentResponse,
   LiveEnablePrepareResponse,
   LoginResponse,
+  MarketEfficiencyReportResponse,
   MarketProfileSummaryResponse,
   OrderStatus,
   OrderFillResponse,
@@ -342,6 +346,7 @@ export function DashboardScreen({ section }: Props) {
   const [settingsData, setSettingsData] = useState<BotSettingsResponse | null>(null);
   const [runs, setRuns] = useState<RunResponse[]>([]);
   const [decisions, setDecisions] = useState<CommitteeDecision[]>([]);
+  const [decisionAudits, setDecisionAudits] = useState<DecisionAuditResponse[]>([]);
   const [executionIntents, setExecutionIntents] = useState<ExecutionIntentResponse[]>([]);
   const [orders, setOrders] = useState<OrderResponse[]>([]);
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -351,6 +356,7 @@ export function DashboardScreen({ section }: Props) {
   const [riskEvents, setRiskEvents] = useState<RiskEventResponse[]>([]);
   const [alerts, setAlerts] = useState<RiskEventResponse[]>([]);
   const [performanceSummary, setPerformanceSummary] = useState<PerformanceSummaryResponse | null>(null);
+  const [riskCalibration, setRiskCalibration] = useState<MarketEfficiencyReportResponse | null>(null);
   const [executionQualitySamples, setExecutionQualitySamples] = useState<ExecutionQualitySampleResponse[]>([]);
   const [executionQualitySummary, setExecutionQualitySummary] = useState<ExecutionQualitySummaryResponse[]>([]);
   const [executionFilters, setExecutionFilters] = useState<ExecutionQualityFilters>(() => defaultExecutionQualityFilters());
@@ -398,6 +404,7 @@ export function DashboardScreen({ section }: Props) {
     setSettingsData(null);
     setRuns([]);
     setDecisions([]);
+    setDecisionAudits([]);
     setExecutionIntents([]);
     setOrders([]);
     setSelectedOrderId(null);
@@ -407,6 +414,7 @@ export function DashboardScreen({ section }: Props) {
     setRiskEvents([]);
     setAlerts([]);
     setPerformanceSummary(null);
+    setRiskCalibration(null);
     setExecutionQualitySamples([]);
     setExecutionQualitySummary([]);
     const defaults = defaultExecutionQualityFilters();
@@ -507,12 +515,14 @@ export function DashboardScreen({ section }: Props) {
       settingsResponse,
       runsResponse,
       decisionsResponse,
+      decisionAuditsResponse,
       executionIntentResponse,
       ordersResponse,
       positionsResponse,
       riskResponse,
       alertsResponse,
       performanceResponse,
+      riskCalibrationResponse,
       executionQualitySamplesResponse,
       executionQualitySummaryResponse,
       mismatchesResponse,
@@ -525,12 +535,14 @@ export function DashboardScreen({ section }: Props) {
       getSettings(resolvedProfileId),
       listRuns({ profileId: resolvedProfileId }),
       listDecisions({ profileId: resolvedProfileId }),
+      listDecisionAudits(12, resolvedProfileId),
       listExecutionIntents(undefined, 24, resolvedProfileId),
       listOrders({ profileId: resolvedProfileId }),
       listPositions({ profileId: resolvedProfileId }),
       listRiskEvents({ profileId: resolvedProfileId }),
       listAlerts(16, resolvedProfileId),
       getPerformanceSummary(60, resolvedProfileId),
+      getRiskCalibrationReport(24 * 60, resolvedProfileId),
       listExecutionQualitySamples(
         executionFilters.sampleSymbol || undefined,
         executionFilters.sampleStatus === "all" ? undefined : executionFilters.sampleStatus,
@@ -550,12 +562,14 @@ export function DashboardScreen({ section }: Props) {
     setSettingsDraft((current) => (resetDraft || current === null ? settingsResponse : current));
     setRuns(runsResponse);
     setDecisions(decisionsResponse);
+    setDecisionAudits(decisionAuditsResponse);
     setExecutionIntents(executionIntentResponse);
     setOrders(ordersResponse);
     setPositions(positionsResponse);
     setRiskEvents(riskResponse);
     setAlerts(alertsResponse);
     setPerformanceSummary(performanceResponse);
+    setRiskCalibration(riskCalibrationResponse);
     setExecutionQualitySamples(executionQualitySamplesResponse);
     setExecutionQualitySummary(executionQualitySummaryResponse);
     setMismatches(mismatchesResponse);
@@ -1608,59 +1622,91 @@ export function DashboardScreen({ section }: Props) {
         ) : null}
 
         {!intakeRequired && section === "decisions" ? (
-          <section className="panel">
-            <div className="panel-heading">
-              <h3>Committee decisions</h3>
-              <p>Combined market/news conviction after risk review.</p>
-            </div>
-            <div className="decision-list long">
-              {filteredDecisions.map((decision) => {
-                const disagreement = summarizeDecisionDisagreement(decision);
-                return (
-                  <article className="decision-item" key={`${decision.symbol}-${decision.entry}-${decision.confidence}`}>
-                    <div className="decision-meta">
-                      <strong>{decision.symbol}</strong>
-                      <span>{decision.direction}</span>
-                      <span className={decision.status === "approved" ? "tag-positive" : "tag-negative"}>
-                        {decision.status}
-                      </span>
-                    </div>
-                    <p>{decision.thesis}</p>
-                    <div className="decision-values">
-                      <span>Entry {currency(decision.entry)}</span>
-                      <span>Stop {currency(decision.stop_loss)}</span>
-                      <span>Target {currency(decision.take_profit)}</span>
-                      <span>Conf {percent(decision.confidence)}</span>
-                      <span>
-                        Votes {disagreement.approvalVotes}/{disagreement.totalVotes}
-                      </span>
-                      <span>Dissent {disagreement.disagreementCount}</span>
-                    </div>
-                    {decision.risk_notes.length ? <div className="note-row">{decision.risk_notes.join(" | ")}</div> : null}
-                    {decision.agent_signals.length ? (
-                      <div className="note-row">
-                        Agents:{" "}
-                        {decision.agent_signals
-                          .map((signal) => `${signal.role}:${signal.vote}:${percent(signal.confidence)}`)
-                          .join(" | ")}
+          <div className="dashboard-grid">
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>AI decision audit</h3>
+                <p>Recent run scoring for missing market context, prompt lineage, and confidence risk.</p>
+              </div>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Status</th>
+                    <th>Conf</th>
+                    <th>Score</th>
+                    <th>Issues</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {decisionAudits.map((audit) => (
+                    <tr key={audit.run_id}>
+                      <td>{audit.symbol}</td>
+                      <td>{audit.status}</td>
+                      <td>{percent(audit.confidence)}</td>
+                      <td>{percent(audit.score)}</td>
+                      <td>{audit.issues.slice(0, 3).join(" | ") || "clean"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {decisionAudits.length === 0 ? <p className="muted">No decision audit rows yet.</p> : null}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Committee decisions</h3>
+                <p>Combined market/news conviction after risk review.</p>
+              </div>
+              <div className="decision-list long">
+                {filteredDecisions.map((decision) => {
+                  const disagreement = summarizeDecisionDisagreement(decision);
+                  return (
+                    <article className="decision-item" key={`${decision.symbol}-${decision.entry}-${decision.confidence}`}>
+                      <div className="decision-meta">
+                        <strong>{decision.symbol}</strong>
+                        <span>{decision.direction}</span>
+                        <span className={decision.status === "approved" ? "tag-positive" : "tag-negative"}>
+                          {decision.status}
+                        </span>
                       </div>
-                    ) : null}
-                    {decision.committee_notes.length ? (
-                      <div className="note-row">Committee: {decision.committee_notes.join(" | ")}</div>
-                    ) : null}
-                    {Object.keys(decision.prompt_versions).length ? (
-                      <div className="note-row">
-                        Prompt versions:{" "}
-                        {Object.entries(decision.prompt_versions)
-                          .map(([role, version]) => `${role}:${version}`)
-                          .join(" | ")}
+                      <p>{decision.thesis}</p>
+                      <div className="decision-values">
+                        <span>Entry {currency(decision.entry)}</span>
+                        <span>Stop {currency(decision.stop_loss)}</span>
+                        <span>Target {currency(decision.take_profit)}</span>
+                        <span>Conf {percent(decision.confidence)}</span>
+                        <span>
+                          Votes {disagreement.approvalVotes}/{disagreement.totalVotes}
+                        </span>
+                        <span>Dissent {disagreement.disagreementCount}</span>
                       </div>
-                    ) : null}
-                  </article>
-                );
-              })}
-            </div>
-          </section>
+                      {decision.risk_notes.length ? <div className="note-row">{decision.risk_notes.join(" | ")}</div> : null}
+                      {decision.agent_signals.length ? (
+                        <div className="note-row">
+                          Agents:{" "}
+                          {decision.agent_signals
+                            .map((signal) => `${signal.role}:${signal.vote}:${percent(signal.confidence)}`)
+                            .join(" | ")}
+                        </div>
+                      ) : null}
+                      {decision.committee_notes.length ? (
+                        <div className="note-row">Committee: {decision.committee_notes.join(" | ")}</div>
+                      ) : null}
+                      {Object.keys(decision.prompt_versions).length ? (
+                        <div className="note-row">
+                          Prompt versions:{" "}
+                          {Object.entries(decision.prompt_versions)
+                            .map(([role, version]) => `${role}:${version}`)
+                            .join(" | ")}
+                        </div>
+                      ) : null}
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          </div>
         ) : null}
 
         {!intakeRequired && section === "risk" ? (
@@ -1752,6 +1798,63 @@ export function DashboardScreen({ section }: Props) {
                 </>
               ) : (
                 <p className="muted">Performance summary is unavailable.</p>
+              )}
+            </section>
+
+            <section className="panel">
+              <div className="panel-heading">
+                <h3>Risk calibration</h3>
+                <p>Pre-trade rejection pressure joined with execution quality and post-trade review outcomes.</p>
+              </div>
+              {riskCalibration ? (
+                <>
+                  <div className="metric-row">
+                    <article className="metric-block">
+                      <span>Window</span>
+                      <strong>{riskCalibration.window_minutes}m</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Approval rate</span>
+                      <strong>{percent(riskCalibration.approval_rate)}</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Rejected</span>
+                      <strong>{riskCalibration.rejected_candidates}</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Avg quality</span>
+                      <strong>{riskCalibration.execution_quality.avg_quality_score.toFixed(3)}</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Abs slip</span>
+                      <strong>{riskCalibration.execution_quality.avg_abs_realized_slippage_bps.toFixed(2)} bps</strong>
+                    </article>
+                    <article className="metric-block">
+                      <span>Queued reviews</span>
+                      <strong>{riskCalibration.post_trade_reviews.queued_reviews}</strong>
+                    </article>
+                  </div>
+                  <div className="stack-list">
+                    {riskCalibration.recommendations.map((recommendation) => (
+                      <div className="risk-item" key={recommendation}>
+                        <div>
+                          <strong>Recommendation</strong>
+                          <p>{recommendation}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {Object.keys(riskCalibration.rejection_codes).length ? (
+                    <div className="note-row">
+                      Rejections:{" "}
+                      {Object.entries(riskCalibration.rejection_codes)
+                        .map(([code, count]) => `${code}:${count}`)
+                        .join(" | ")}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <p className="muted">Risk calibration report is unavailable.</p>
               )}
             </section>
 

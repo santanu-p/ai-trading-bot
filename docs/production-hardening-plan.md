@@ -29,7 +29,7 @@ The current repo is still a scaffold. It has API, worker, dashboard, risk checks
 - rehearsed disaster recovery on managed services
 - host-enforced production change management
 
-Repo-local control-plane hardening, release-governance docs, incident playbooks, and disaster-recovery runbooks now exist in the repository. The remaining gaps are primarily hosted-platform and operational-enforcement work.
+Repo-local control-plane hardening, release-governance docs, incident playbooks, disaster-recovery runbooks, broker stream event ingestion hooks, risk calibration reporting, and AI decision audit scoring now exist in the repository. The remaining gaps are primarily hosted-platform and operational-enforcement work, including a long-running broker websocket supervisor, external observability sinks, managed secret rotation, and hosted rollout controls.
 
 ## Production Readiness Exit Criteria
 

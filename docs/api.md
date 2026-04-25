@@ -252,6 +252,39 @@ Returns risk and failure events.
 Phase 5 adds `agent_output_malformed` and recurring `trade_review_pattern` events.
 Phase 6 adds `auto_kill_switch` when severe anomaly clustering triggers an automatic safety halt.
 Phase 7 adds execution-quality guardrail events such as `execution_quality_rejected`, `execution_feedback_rejected`, and `execution_quality_capture_failed`.
+Phase 11 adds `broker_stream_unknown_order` when a broker trade-update stream event cannot be matched to a local order by broker or client order ID.
+
+### `GET /risk/calibration`
+
+Returns a profile-scoped market-efficiency report that joins pre-trade rejection pressure, execution-quality samples, and post-trade reviews into one operator calibration surface.
+
+Query params:
+
+- `profile_id` (optional)
+- `window_minutes`
+
+Response includes:
+
+- trade-candidate approval and rejection counts
+- rejection-code frequency table
+- execution-quality sample count, average quality score, and average absolute realized slippage
+- post-trade review count, queued review count, and average review score
+- recommended operator actions when rejection pressure, slippage, or review backlog is elevated
+
+### `GET /ai/decision-audit`
+
+Returns recent AI decision audit rows scored for missing context and risky confidence behavior.
+
+Query params:
+
+- `profile_id` (optional)
+- `limit`
+
+Each row includes:
+
+- source run ID, profile, symbol, status, confidence, model name, and prompt versions
+- audit score from `0.0` to `1.0`
+- issue codes such as `missing_feature_snapshot`, `missing_data_quality`, `data_quality_failed`, `overconfident_rejection`, `low_confidence_approval`, `missing_structured_events`, `missing_model_name`, and `missing_prompt_versions`
 
 ## Observability And Alerts
 

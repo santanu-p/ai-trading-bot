@@ -11,6 +11,71 @@ from tradingbot.enums import OrderIntent, OrderStatus
 from tradingbot.models import AgentRun, ExecutionIntent, OrderRecord, RiskEvent, TradeReview
 
 
+class DecisionAuditService:
+    def __init__(self, session: Session, *, profile_id: int | None = None) -> None:
+        self.session = session
+        self.profile_id = profile_id
+
+    def audit_recent_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        query = select(AgentRun).order_by(AgentRun.created_at.desc()).limit(max(limit, 1))
+        if self.profile_id is not None:
+            query = query.where(AgentRun.profile_id == self.profile_id)
+
+        rows: list[dict[str, Any]] = []
+        for run in self.session.scalars(query).all():
+            payload = run.decision_payload if isinstance(run.decision_payload, dict) else {}
+            issues: list[str] = []
+            score = 1.0
+            confidence = _optional_float(payload.get("confidence"), fallback=0.0) or 0.0
+            status = str(payload.get("status") or "unknown")
+
+            if not payload:
+                issues.append("missing_decision_payload")
+                score -= 0.35
+            feature_snapshot = payload.get("feature_snapshot")
+            if not isinstance(feature_snapshot, dict) or not feature_snapshot:
+                issues.append("missing_feature_snapshot")
+                score -= 0.18
+            data_quality = payload.get("data_quality")
+            if not isinstance(data_quality, dict):
+                issues.append("missing_data_quality")
+                score -= 0.14
+            elif data_quality.get("passed") is False:
+                issues.append("data_quality_failed")
+                score -= 0.12
+            if confidence >= 0.9 and status != "approved":
+                issues.append("overconfident_rejection")
+                score -= 0.18
+            if status == "approved" and confidence < 0.55:
+                issues.append("low_confidence_approval")
+                score -= 0.2
+            if not isinstance(payload.get("structured_events"), list):
+                issues.append("missing_structured_events")
+                score -= 0.08
+            if run.model_name is None:
+                issues.append("missing_model_name")
+                score -= 0.05
+            if not run.prompt_versions_json:
+                issues.append("missing_prompt_versions")
+                score -= 0.05
+
+            rows.append(
+                {
+                    "run_id": run.id,
+                    "profile_id": run.profile_id,
+                    "symbol": run.symbol,
+                    "status": status,
+                    "confidence": round(confidence, 6),
+                    "model_name": run.model_name,
+                    "prompt_versions": dict(run.prompt_versions_json or {}),
+                    "score": round(max(min(score, 1.0), 0.0), 6),
+                    "issues": issues,
+                    "created_at": run.created_at,
+                }
+            )
+        return rows
+
+
 class TradeReviewService:
     def __init__(self, session: Session, *, profile_id: int | None = None) -> None:
         self.session = session
@@ -255,3 +320,12 @@ def _prompt_signature(prompt_versions: dict[str, str]) -> str:
     if not prompt_versions:
         return "none"
     return json.dumps(prompt_versions, sort_keys=True)
+
+
+def _optional_float(value: Any, fallback: float | None = None) -> float | None:
+    try:
+        if value is None:
+            return fallback
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback

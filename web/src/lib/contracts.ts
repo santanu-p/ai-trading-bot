@@ -406,6 +406,7 @@ export interface PerformanceSummaryResponse {
 export interface ExecutionQualitySampleResponse {
   id: number;
   order_id: number;
+  profile_id: number;
   symbol: string;
   broker_slug: BrokerSlug;
   venue: string;
@@ -585,4 +586,41 @@ export interface TradeReviewSummaryResponse {
   avg_score: number;
   avg_return_pct: number;
   loss_causes: Record<string, number>;
+}
+
+export interface MarketExecutionQualityReport {
+  sample_count: number;
+  avg_quality_score: number;
+  avg_abs_realized_slippage_bps: number;
+}
+
+export interface MarketPostTradeReviewsReport {
+  review_count: number;
+  queued_reviews: number;
+  avg_review_score: number;
+}
+
+export interface MarketEfficiencyReportResponse {
+  window_minutes: number;
+  trade_candidates: number;
+  approved_candidates: number;
+  rejected_candidates: number;
+  approval_rate: number;
+  rejection_codes: Record<string, number>;
+  execution_quality: MarketExecutionQualityReport;
+  post_trade_reviews: MarketPostTradeReviewsReport;
+  recommendations: string[];
+}
+
+export interface DecisionAuditResponse {
+  run_id: string;
+  profile_id: number;
+  symbol: string;
+  status: string;
+  confidence: number;
+  model_name?: string | null;
+  prompt_versions: Record<string, string>;
+  score: number;
+  issues: string[];
+  created_at: string;
 }

@@ -32,12 +32,14 @@ from tradingbot.schemas.trading import (
     AuditLogResponse,
     CommitteeDecision,
     CurrentOperatorResponse,
+    DecisionAuditResponse,
     ExecutionIntentResponse,
     ExecutionQualitySampleResponse,
     ExecutionQualitySummaryResponse,
     FlattenResponse,
     LiveEnablePrepareResponse,
     LiveEnableRequest,
+    MarketEfficiencyReportResponse,
     OrderFillResponse,
     OrderReplaceRequest,
     OrderResponse,
@@ -51,8 +53,9 @@ from tradingbot.schemas.trading import (
 )
 from tradingbot.services.adapters import ReplaceOrderRequest, build_broker_adapter
 from tradingbot.services.alerts import AlertService
-from tradingbot.services.evaluation import TradeReviewService
+from tradingbot.services.evaluation import DecisionAuditService, TradeReviewService
 from tradingbot.services.execution import ExecutionService
+from tradingbot.services.market_efficiency import MarketEfficiencyService
 from tradingbot.services.reconciliation import ReconciliationService
 from tradingbot.services.store import ensure_bot_settings, live_trading_env_allowed, resolve_execution_support, strategy_profile_completed
 from tradingbot.security import hash_password, verify_password
@@ -730,6 +733,32 @@ def summarize_trade_reviews(
     service = TradeReviewService(session, profile_id=settings_row.id)
     rows = service.summarize_model_performance(limit=limit)
     return [TradeReviewSummaryResponse.model_validate(item) for item in rows]
+
+
+@router.get("/risk/calibration", response_model=MarketEfficiencyReportResponse)
+def get_risk_calibration_report(
+    profile_id: int | None = Query(default=None, ge=1),
+    window_minutes: int = Query(default=24 * 60, ge=5, le=30 * 24 * 60),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> MarketEfficiencyReportResponse:
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
+    report = MarketEfficiencyService(session, profile_id=settings_row.id).risk_calibration_report(
+        window_minutes=window_minutes
+    )
+    return MarketEfficiencyReportResponse.model_validate(report)
+
+
+@router.get("/ai/decision-audit", response_model=list[DecisionAuditResponse])
+def list_decision_audits(
+    profile_id: int | None = Query(default=None, ge=1),
+    limit: int = Query(default=50, ge=1, le=200),
+    _: CurrentActor = Depends(get_current_operator),
+    session: Session = Depends(db_session_dependency),
+) -> list[DecisionAuditResponse]:
+    settings_row = ensure_bot_settings(session, profile_id=profile_id)
+    rows = DecisionAuditService(session, profile_id=settings_row.id).audit_recent_runs(limit=limit)
+    return [DecisionAuditResponse.model_validate(item) for item in rows]
 
 
 @router.get("/audit-logs", response_model=list[AuditLogResponse])

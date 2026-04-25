@@ -65,6 +65,8 @@ The dashboard polls the backend every 30 seconds for:
 - trade reviews
 - trade review summaries
 
+The dashboard also polls risk calibration and AI decision-audit reports for the selected profile.
+
 It also keeps an SSE connection open to `/stream/operations` for near-real-time updates on alerts, fills, transitions, unresolved mismatch counts, queued trade reviews, and a slim performance snapshot.
 
 ### Actions
@@ -126,8 +128,9 @@ Risk now also includes a Phase 8 observability surface:
 - an open-risk-budget visualization derived from saved limits versus current portfolio state
 - prompt-version attribution rows from grouped trade-review summaries
 - a rendered trade-review queue for queued and completed post-trade reviews
+- a risk calibration panel that joins pre-trade approvals/rejections, execution quality, post-trade review status, and operator recommendations
 
-Decisions now also surface committee disagreement summaries, specialist vote rollups, committee notes, and prompt-version lineage.
+Decisions now also surface committee disagreement summaries, specialist vote rollups, committee notes, prompt-version lineage, and AI decision-audit scoring for missing context or risky confidence behavior.
 
 Settings displays editable fields for all configurable guardrails and the watchlist plus live safety controls and session management.
 
@@ -140,6 +143,6 @@ Settings displays editable fields for all configurable guardrails and the watchl
 
 ## Current Limitations
 
-- The operator surface uses backend SSE, but it is still snapshot-driven rather than direct broker-native websocket ingestion.
+- Broker trade-update parsing and local ingestion hooks exist, but the operator surface still needs a hosted broker-native websocket supervisor wired into the runtime.
 - No optimistic state reconciliation.
 - Frontend type-check/build validation was not run in this task because local Node dependencies were intentionally not installed.
