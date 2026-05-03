@@ -71,9 +71,58 @@ See [setup.md](setup.md) for the exact local commands and [release-governance.md
 - verify dashboard state matches broker state
 - confirm hosted secret handling, HTTPS, and alert-routing integrations are in place
 
+## Monitoring Infrastructure
+
+The bot now provides built-in observability endpoints:
+
+- `GET /metrics` — public Prometheus scrape endpoint for counters and duration histograms
+- `GET /health/detailed` — component-level health checks (database, Redis, LLM, broker, tracing)
+- Multi-channel alert routing by severity (webhook → Slack → PagerDuty/Opsgenie)
+- Alert suppression and deduplication to prevent alert fatigue
+- Distributed tracing with trace_id/span_id propagation
+
+### Prometheus Integration
+
+Add this to your `prometheus.yml`:
+
+```yaml
+scrape_configs:
+  - job_name: 'tradingbot'
+    scrape_interval: 30s
+    static_configs:
+      - targets: ['localhost:8000']
+```
+
+## Stream Supervisor
+
+A stream supervisor is available for near-real-time order state convergence:
+
+- Start via Celery task: `start_stream`
+- Stop via Celery task: `stop_stream`
+- Auto-restart via periodic health check: `check_stream_health`
+- Current implementation uses REST polling as a WebSocket fallback
+
+## LLM Cost Monitoring
+
+Track LLM spend via the in-process cost tracker:
+
+- Per-call token usage and cost estimation
+- Aggregated reporting by provider, model, and operation
+- Intelligent scan scheduling to skip low-opportunity periods
+
+## Compliance Checks
+
+The compliance service provides automated regulatory monitoring:
+
+- Pattern Day Trader (PDT) detection
+- Wash-sale detection across 30-day windows
+- Position concentration limit monitoring
+- Automated daily trade reports
+
 ## Current Operational Gaps
 
-- no externalized metrics/trace sink (telemetry is currently in-process only)
-- webhook alert delivery is generic only; managed pager/on-call routing is still external
-- the dashboard has a backend SSE stream, and broker trade-update payloads now have a repo-local parser/ingestion path; a long-running broker websocket supervisor still needs hosted deployment wiring
 - backup/PITR, restore drills, and queue-loss expectations still depend on hosted platform configuration
+- infrastructure-as-code (Terraform/Pulumi) for cloud provisioning is not yet included
+- production secret rotation via AWS/GCP/Azure Secrets Manager is still external
+- the stream supervisor uses REST polling; a true WebSocket connection requires the `websockets` library
+

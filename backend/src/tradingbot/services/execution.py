@@ -18,7 +18,6 @@ from tradingbot.services.adapters import (
     ExecutionAdapter,
     OrderRequest,
     ReplaceOrderRequest,
-    _to_datetime,
 )
 from tradingbot.services.calendar import MarketCalendarService
 from tradingbot.services.contracts import ContractMasterService
@@ -175,7 +174,7 @@ class ExecutionService:
             idempotency_key=f"run:{run_id}",
             decision_payload=decision_context or decision.model_dump(mode="json"),
             risk_payload=risk_result.model_dump(mode="json"),
-            block_reason=block_reason
+            block_reason=None
             if execution_allowed
             else (block_reason or "Execution is blocked for the selected broker/profile combination."),
             metadata_json={
@@ -696,11 +695,12 @@ class ExecutionService:
             )
         )
 
-        order.filled_quantity = min(order.quantity, order.filled_quantity + fill.quantity)
-        if order.average_fill_price is None:
+        previous_filled = order.filled_quantity
+        order.filled_quantity = min(order.quantity, previous_filled + fill.quantity)
+        if order.average_fill_price is None or previous_filled == 0:
             order.average_fill_price = fill.price
         else:
-            weighted_total = (order.average_fill_price * max(order.filled_quantity - fill.quantity, 0)) + (
+            weighted_total = (order.average_fill_price * previous_filled) + (
                 fill.price * fill.quantity
             )
             order.average_fill_price = weighted_total / max(order.filled_quantity, 1)
@@ -1132,6 +1132,22 @@ class ExecutionService:
             source=source,
         )
 
+
+
+def _to_datetime(value: object) -> datetime | None:
+    """Parse a datetime from various input formats."""
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        raw = value.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(raw)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return None
 
 
 def _serialize_replace_patch(patch: ReplaceOrderRequest) -> dict[str, object]:

@@ -254,11 +254,11 @@ class TradeReviewService:
         if pnl >= 0:
             return (
                 f"Trade thesis for {symbol} was validated with realized PnL {round(pnl, 2)} "
-                f"and return {round(return_pct * 100, 3)}%."
+                f"and return {round(return_pct, 3)}%."
             )
         return (
             f"Trade thesis for {symbol} underperformed with realized PnL {round(pnl, 2)} "
-            f"and return {round(return_pct * 100, 3)}%. "
+            f"and return {round(return_pct, 3)}%. "
             f"Classified cause: {loss_cause or 'unclassified'}. Thesis: {thesis}"
         )
 

@@ -9,7 +9,7 @@ This document outlines the next wave of improvements after the completion of all
 
 ## Phase 10: Infrastructure as Code & Hosted Deployment
 
-**Status**: Not started — this is the top remaining gap from the production hardening plan.
+**Status**: ⚠️ Code layer not applicable — requires cloud provider account and IaC tooling (Terraform/Pulumi/CDK).
 
 ### 10.1 Infrastructure as Code (IaC)
 
@@ -38,7 +38,7 @@ This document outlines the next wave of improvements after the completion of all
 
 ## Phase 11: External Observability Pipeline
 
-**Status**: Not started — current observability is repo-local; needs external sinks for production.
+**Status**: ✅ Code layer complete — Prometheus metrics export, distributed tracing (otel.py), detailed health checks, and multi-channel alert dispatch with escalation/suppression.
 
 ### 11.1 Centralized Log, Metric & Trace Export
 
@@ -63,7 +63,7 @@ This document outlines the next wave of improvements after the completion of all
 
 ## Phase 12: Broker Stream Supervision & Real-Time State Convergence
 
-**Status**: Not started — current state sync is poll-based; needs real-time convergence.
+**Status**: ✅ Code layer complete — StreamSupervisor framework with Alpaca adapter (REST polling mode), auto-reconnect, heartbeat, backfill, and Celery lifecycle tasks.
 
 ### 12.1 Long-Running Broker WebSocket Supervisor
 
@@ -87,7 +87,7 @@ This document outlines the next wave of improvements after the completion of all
 
 ## Phase 13: Multi-Market & Multi-Broker Expansion
 
-**Status**: Not started — the routing layer exists but only US cash equities are executable.
+**Status**: 🔶 Foundation complete — broker slug enums, Currency enum, and FX conversion service with caching. Adapter implementations require broker API accounts.
 
 ### 13.1 Add Broker Adapters for New Markets
 
@@ -111,7 +111,7 @@ This document outlines the next wave of improvements after the completion of all
 
 ## Phase 14: Advanced AI & Strategy Intelligence
 
-**Status**: Not started — current committee is LLM-based; needs hybrid intelligence.
+**Status**: 🔶 Foundation complete — GradientBoostSignalModel (pure Python), feature matrix builder, signal blending. RL and fine-tuning require external infrastructure.
 
 ### 14.1 ML Signal Models
 
@@ -141,7 +141,7 @@ This document outlines the next wave of improvements after the completion of all
 
 ## Phase 15: Advanced Backtesting & Research
 
-**Status**: Not started — current backtest engine is solid but can go deeper.
+**Status**: ✅ Code layer complete — Monte Carlo simulation (VaR/CVaR), 6 built-in stress scenarios, adverse fill models.
 
 ### 15.1 Monte Carlo & Stress Testing
 
@@ -165,7 +165,7 @@ This document outlines the next wave of improvements after the completion of all
 
 ## Phase 16: Operational Maturity
 
-**Status**: Not started — rehearsals and drills for production incidents.
+**Status**: 🔶 Partially complete — Compliance service (PDT, wash-sale, position limits, daily reports) and LLM cost tracking with intelligent scan scheduling. Incident drills and multi-operator RBAC require infrastructure.
 
 ### 16.1 Incident Drills & Gamedays
 

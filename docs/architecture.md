@@ -3,23 +3,26 @@
 ## High-Level Topology
 
 ```text
-Next.js dashboard
-        |
-        v
-    FastAPI API
-        |
-        +--------------------+
-        |                    |
-        v                    v
-     Postgres             Redis/Celery
-                              |
-                              v
-                           Worker
-                              |
-                 +------------+------------+
-                 |                         |
-                 v                         v
-             OpenAI API               Alpaca APIs
+               Next.js Dashboard
+                      |
+                      v
+                 FastAPI API ─── /metrics (Prometheus)
+                      |          /health/detailed
+            +---------+---------+
+            |                   |
+            v                   v
+         Postgres           Redis/Celery
+                                |
+                    +-----------+-----------+
+                    |                       |
+                    v                       v
+                 Worker                Stream Supervisor
+                    |                       |
+       +------------+------------+         |
+       |            |            |         |
+       v            v            v         v
+   OpenAI/      Alpaca APIs   ML Signal  Alpaca WebSocket
+   Gemini       (REST)        Pipeline   (Polling Fallback)
 ```
 
 ## Backend Layers
@@ -34,12 +37,15 @@ Responsibilities:
 - auth gating
 - route registration
 - API serialization
+- Prometheus metrics export (`/metrics`)
+- component-level health checks (`/health/detailed`)
 
 Key files:
 
 - [main.py](../backend/src/tradingbot/api/main.py)
 - [dependencies.py](../backend/src/tradingbot/api/dependencies.py)
 - [trading.py](../backend/src/tradingbot/api/routers/trading.py)
+- [metrics_export.py](../backend/src/tradingbot/api/routers/metrics_export.py)
 
 ### Schema Layer
 
@@ -58,8 +64,8 @@ Located in `backend/src/tradingbot/services`.
 
 Responsibilities:
 
-- Alpaca broker/data/news adapters
-- OpenAI agent runner
+- Alpaca broker/data/news adapters (with protocol support for Zerodha, IBKR, Binance, Coinbase)
+- OpenAI and Gemini agent runners with retry/backoff logic
 - indicator and feature computation
 - structured event extraction (earnings, analyst actions, macro/calendar, sector context)
 - scan-time data quality validation (staleness, missing candles, feed gaps, delayed news)
@@ -72,14 +78,40 @@ Responsibilities:
 - execution persistence
 - execution intent queuing and approval handling
 - post-submit execution/TCA analytics and symbol-quality feedback
-- structured observability context (request/run IDs), JSON logging, and in-process metric aggregation
-- operational alert synthesis from failure/rejection/reconciliation pressure signals
-- best-effort alert webhook dispatch
+- distributed tracing context propagation (trace_id/span_id via `otel.py`)
+- structured JSON logging and in-process metric aggregation with Prometheus export
+- multi-channel alert dispatch (webhook/Slack/PagerDuty/Opsgenie) with severity routing and suppression
+- stream supervisor framework with Alpaca WebSocket adapter
+- FX conversion service with rate caching and USD triangulation
+- ML signal pipeline with gradient-boost ensemble and LLM score blending
+- Monte Carlo simulation and stress testing (VaR/CVaR, 6 built-in scenarios)
+- compliance reporting (PDT detection, wash-sale detection, position limits)
+- LLM cost tracking and intelligent scan scheduling
 - settings persistence
 - research backtest simulation (slippage, commission, delayed fills, rejects)
 - walk-forward and regime scoring
 - persisted backtest report assembly
 - post-trade review generation and recurring-pattern classification
+
+Key service modules (35 total):
+
+| Module | Purpose |
+|--------|---------|
+| `adapters.py` | Broker adapter protocol + Alpaca implementation |
+| `agents.py` | LLM specialist agents |
+| `committee.py` | Multi-agent committee orchestration |
+| `risk.py` | Deterministic risk engine |
+| `execution.py` | Order lifecycle + VWAP tracking |
+| `otel.py` | Distributed tracing (trace_id/span_id) |
+| `metrics.py` | Counters + durations + Prometheus export |
+| `alert_dispatch.py` | Multi-channel alert routing with suppression |
+| `stream_supervisor.py` | WebSocket broker streaming framework |
+| `ml_signals.py` | ML signal pipeline + gradient boost |
+| `monte_carlo.py` | Monte Carlo simulation + stress tests |
+| `compliance.py` | PDT / wash-sale / position limits |
+| `cost_tracking.py` | LLM cost tracking + scan scheduling |
+| `fx.py` | FX conversion service |
+| `llm_clients.py` | OpenAI/Gemini clients with retry logic |
 
 ### Worker Layer
 
@@ -92,6 +124,7 @@ Responsibilities:
 - recurring market scans
 - execution-intent dispatch
 - asynchronous backtests with persisted report lifecycle (`queued` -> `running` -> `succeeded`/`failed`)
+- stream supervisor lifecycle tasks (start/stop/health-check)
 
 ## Trading Decision Flow
 
@@ -194,10 +227,23 @@ Recent symbol-level quality is summarized into feedback signals that can block w
 ## Observability And Alert Flow
 
 1. API middleware assigns/propagates a request ID and emits structured request-start/request-complete logs.
-2. Worker and execution tasks emit counters and latency distributions for scan/reconciliation/intent/backtest boundaries.
-3. Alpaca adapter and LLM clients emit external-call latency and success/error counters.
-4. Alert synthesis evaluates runtime windows and emits persisted `alert_*` events for worker instability, reconciliation stress, kill-switch activation, and rejection/malformed spikes.
-5. Operators consume these signals via `/performance/summary`, `/alerts`, and `/stream/operations`, and alert payloads can also be forwarded to configured webhooks.
+2. Distributed tracing context (`otel.py`) provides trace_id and span_id propagation across API → worker → broker calls via `contextvars`.
+3. Worker and execution tasks emit counters and latency distributions for scan/reconciliation/intent/backtest boundaries.
+4. Alpaca adapter and LLM clients emit external-call latency and success/error counters.
+5. Prometheus-compatible `/metrics` endpoint exposes all counters and duration histograms for external scraping.
+6. `/health/detailed` provides component-level status for database, Redis, LLM provider, broker, and tracing.
+7. Alert synthesis evaluates runtime windows and emits persisted `alert_*` events for worker instability, reconciliation stress, kill-switch activation, and rejection/malformed spikes.
+8. Multi-channel alert dispatch routes alerts by severity: info → webhook, warning → + Slack, critical → + PagerDuty/Opsgenie, with per-code suppression and deduplication.
+9. Operators consume these signals via `/performance/summary`, `/alerts`, and `/stream/operations`.
+
+## Stream Supervisor Flow
+
+1. Celery task starts a `StreamSupervisor` in a daemon thread for a given trading profile.
+2. The supervisor connects to the broker (Alpaca WebSocket or REST polling fallback).
+3. Events are parsed and processed through the execution service order state machine.
+4. On disconnect, the supervisor automatically reconnects with exponential backoff (1s → 60s).
+5. On reconnect, missed events are backfilled from the broker REST API.
+6. A periodic health-check task auto-restarts dead supervisors for enabled profiles.
 
 ## Storage Model
 
@@ -228,7 +274,7 @@ Schema evolution is versioned with Alembic under `backend/alembic/`.
 
 ## Current Limitations
 
-- Backend SSE is available for operator state changes, but direct broker-native websocket ingestion is still not wired
 - Sector/correlation concentration currently uses heuristic buckets rather than a full factor model
-- Frontend build/type validation was not run in this task because local Node dependencies were intentionally not installed
-- The current auth/session layer now includes CSRF protection and rate limits, but production secret rotation and managed edge controls still remain external
+- The stream supervisor uses REST polling as a WebSocket fallback since Python stdlib lacks a WebSocket client — a production deployment should add the `websockets` library for true sub-second latency
+- ML model training currently uses a pure-Python gradient-boost implementation; production ML pipelines should integrate scikit-learn or similar for performance
+- Production secret rotation and managed edge controls still remain external

@@ -143,6 +143,6 @@ Settings displays editable fields for all configurable guardrails and the watchl
 
 ## Current Limitations
 
-- Broker trade-update parsing and local ingestion hooks exist, but the operator surface still needs a hosted broker-native websocket supervisor wired into the runtime.
+- The stream supervisor is now implemented with REST polling fallback; a production deployment with the `websockets` library will enable sub-second latency for order state convergence.
 - No optimistic state reconciliation.
-- Frontend type-check/build validation was not run in this task because local Node dependencies were intentionally not installed.
+- Some backend settings remain API-only today, including portions of the portfolio concentration, dynamic sizing, cooldown, and anomaly-threshold surface.

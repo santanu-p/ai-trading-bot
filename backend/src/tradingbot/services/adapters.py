@@ -615,7 +615,7 @@ class AlpacaNewsAdapter(AlpacaRESTMixin):
                 summary=item.get("summary", ""),
                 source=item.get("source", "alpaca"),
                 created_at=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),
-                sentiment_hint=item.get("headline", ""),
+                sentiment_hint=item.get("sentiment", "") or item.get("headline", ""),
             )
             for item in items
         ]
@@ -645,7 +645,7 @@ class AlpacaNewsAdapter(AlpacaRESTMixin):
                 summary=item.get("summary", ""),
                 source=item.get("source", "alpaca"),
                 created_at=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),
-                sentiment_hint=item.get("headline", ""),
+                sentiment_hint=item.get("sentiment", "") or item.get("headline", ""),
             )
             for item in items
         ]

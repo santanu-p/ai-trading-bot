@@ -193,10 +193,8 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
         if profile_id is None:
             aggregate = {"queued": 0, "repaired_children": 0, "unresolved_mismatches": 0}
             for profile in list_enabled_profiles(session):
-                result = run_market_scan(profile.id)
-                aggregate["queued"] += int(result.get("queued", 0))
-                aggregate["repaired_children"] += int(result.get("repaired_children", 0))
-                aggregate["unresolved_mismatches"] += int(result.get("unresolved_mismatches", 0))
+                run_market_scan.delay(profile.id)
+                aggregate["queued"] += 1
             return aggregate
 
         settings_row = ensure_bot_settings(session, profile_id=profile_id)
@@ -263,7 +261,7 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
         )
         if session_state.should_flatten_positions:
             if session.query(PositionRecord).filter(PositionRecord.profile_id == settings_row.id).count() > 0:
-                enqueue_session_flatten("session_close_flatten")
+                enqueue_session_flatten("session_close_flatten", profile_id=settings_row.id)
             return {
                 "queued": 0,
                 "repaired_children": 0,
@@ -732,6 +730,7 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
         }
     except Exception:
         observe_counter("worker.market_scan.failures")
+        session.rollback()
         raise
     finally:
         observe_duration_ms("worker.market_scan.latency_ms", duration_ms=(perf_counter() - started) * 1000)
@@ -766,6 +765,7 @@ def run_reconciliation(profile_id: int | None = None) -> dict[str, int]:
         }
     except Exception:
         observe_counter("worker.reconciliation.failures")
+        session.rollback()
         raise
     finally:
         observe_duration_ms("worker.reconciliation.latency_ms", duration_ms=(perf_counter() - started) * 1000)
@@ -879,6 +879,7 @@ def run_backtest(payload: dict) -> dict[str, int]:
         return {"runs": report.total_trades, "rejected_orders": report.rejected_orders}
     except Exception as exc:  # noqa: BLE001
         observe_counter("worker.backtest.failures")
+        session.rollback()
         if report_id:
             report = session.get(BacktestReport, report_id)
             if report is not None:

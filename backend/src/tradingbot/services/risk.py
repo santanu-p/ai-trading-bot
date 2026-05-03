@@ -471,9 +471,10 @@ class PortfolioRiskService:
         return max((peak - max(current_equity, 0.0)) / peak, 0.0)
 
     def _loss_streak(self) -> int:
-        query = select(TradeReview).order_by(TradeReview.created_at.desc()).limit(20)
+        query = select(TradeReview)
         if self.profile_id is not None:
             query = query.where(TradeReview.profile_id == self.profile_id)
+        query = query.order_by(TradeReview.created_at.desc()).limit(20)
         rows = self.session.scalars(query).all()
         streak = 0
         for row in rows:

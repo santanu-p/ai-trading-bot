@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.requests import Request
 from starlette.responses import Response
 
-from tradingbot.api.routers import auth, backtests, health, performance, settings, trading
+from tradingbot.api.routers import auth, backtests, health, metrics_export, performance, settings, trading
 from tradingbot.config import get_settings, validate_runtime_settings
 from tradingbot.security import create_csrf_token, decode_signed_session, verify_csrf_token
 from tradingbot.services.http_controls import rate_limiter
@@ -254,6 +254,7 @@ def create_app() -> FastAPI:
 
     app.include_router(auth.router)
     app.include_router(health.router)
+    app.include_router(metrics_export.router)
     app.include_router(settings.router)
     app.include_router(performance.router)
     app.include_router(backtests.router)

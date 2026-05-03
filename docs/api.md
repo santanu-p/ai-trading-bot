@@ -2,7 +2,7 @@
 
 ## Auth Model
 
-- All routes except `/auth/login`, `/health`, `/health/live`, and `/health/ready` require a secure HTTP-only session cookie.
+- All routes except `/auth/login`, `/health`, `/health/live`, `/health/ready`, `/health/detailed`, and `/metrics` require a secure HTTP-only session cookie.
 - The backend supports `reviewer`, `operator`, and `admin` roles.
 - Session state is persisted in `operator_sessions`, can expire, and can be revoked by an admin.
 - Authenticated mutating routes also require the CSRF token in the `x-csrf-token` header.
@@ -82,6 +82,39 @@ Readiness probe. Returns dependency status for:
 - redis connectivity
 
 Returns `503` with a degraded check map if a dependency is unavailable.
+
+### `GET /health/detailed`
+
+Component-level health status for monitoring dashboards. Returns:
+
+- database connectivity
+- redis connectivity
+- LLM provider availability and active provider
+- broker credential status
+- recent tracing spans and error count
+- overall status: `healthy`, `degraded`, or `unhealthy`
+- response latency
+
+### `GET /metrics`
+
+Prometheus-compatible metrics endpoint. **Publicly accessible** (no auth required) for external scraping.
+
+Returns all registered counters and duration histograms in Prometheus text exposition format:
+
+```text
+# HELP tradingbot_worker_scan_invocations Counter worker.scan.invocations
+# TYPE tradingbot_worker_scan_invocations counter
+tradingbot_worker_scan_invocations 42
+# HELP tradingbot_llm_latency_ms Duration histogram for llm.latency_ms
+# TYPE tradingbot_llm_latency_ms summary
+tradingbot_llm_latency_ms_count 15
+tradingbot_llm_latency_ms_avg 320.5
+tradingbot_llm_latency_ms{quantile="0.95"} 890.2
+```
+
+Query params:
+
+- `window_minutes` (optional, default: `60`)
 
 ## Observability Headers
 

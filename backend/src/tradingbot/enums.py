@@ -11,11 +11,17 @@ class TradingMode(str, Enum):
 class MarketRegion(str, Enum):
     US = "us"
     IN = "in"
+    EU = "eu"
+    GLOBAL = "global"
 
 
 class BrokerSlug(str, Enum):
     ALPACA = "alpaca"
     INTERNAL_PAPER = "internal_paper"
+    ZERODHA = "zerodha"
+    INTERACTIVE_BROKERS = "interactive_brokers"
+    BINANCE = "binance"
+    COINBASE = "coinbase"
 
 
 class BotStatus(str, Enum):
@@ -156,3 +162,14 @@ class MarketUniverse(str, Enum):
     INDEX_ONLY = "index_only"
     SECTOR_FOCUS = "sector_focus"
     CUSTOM_WATCHLIST = "custom_watchlist"
+
+
+class Currency(str, Enum):
+    USD = "USD"
+    INR = "INR"
+    EUR = "EUR"
+    GBP = "GBP"
+    JPY = "JPY"
+    USDT = "USDT"
+    BTC = "BTC"
+

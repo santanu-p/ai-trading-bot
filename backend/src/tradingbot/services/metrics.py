@@ -95,6 +95,43 @@ class MetricsRegistry:
         duration_rows.sort(key=lambda row: (row.name, tuple(sorted(row.tags.items()))))
         return counter_rows, duration_rows
 
+    def prometheus_export(self, *, window_minutes: int = 60) -> str:
+        """Render all metrics in Prometheus text exposition format.
+
+        Produces HELP, TYPE, and sample lines for every counter and
+        duration (histogram summary) in the registry.
+        """
+        counters, durations = self.summarize(window_minutes=window_minutes)
+        lines: list[str] = []
+
+        emitted_counter_names: set[str] = set()
+        for counter in counters:
+            prom_name = _prometheus_name(counter.name)
+            if prom_name not in emitted_counter_names:
+                lines.append(f"# HELP {prom_name} Counter {counter.name}")
+                lines.append(f"# TYPE {prom_name} counter")
+                emitted_counter_names.add(prom_name)
+            label_str = _prometheus_labels(counter.tags)
+            lines.append(f"{prom_name}{label_str} {counter.value}")
+
+        emitted_duration_names: set[str] = set()
+        for duration in durations:
+            prom_name = _prometheus_name(duration.name)
+            if prom_name not in emitted_duration_names:
+                lines.append(f"# HELP {prom_name} Duration histogram for {duration.name}")
+                lines.append(f"# TYPE {prom_name} summary")
+                emitted_duration_names.add(prom_name)
+            label_str = _prometheus_labels(duration.tags)
+            lines.append(f'{prom_name}_count{label_str} {duration.samples}')
+            lines.append(f'{prom_name}_avg{label_str} {duration.avg_ms}')
+            q95_labels = _prometheus_quantile_labels("0.95", duration.tags)
+            q100_labels = _prometheus_quantile_labels("1.0", duration.tags)
+            lines.append(f'{prom_name}{q95_labels} {duration.p95_ms}')
+            lines.append(f'{prom_name}{q100_labels} {duration.max_ms}')
+
+        lines.append("")  # trailing newline
+        return "\n".join(lines)
+
     def _record(self, kind: str, name: str, value: float, tags: dict[str, Any] | None) -> None:
         normalized_name = name.strip().lower().replace(" ", "_")
         if not normalized_name:
@@ -140,3 +177,29 @@ def observe_counter(name: str, *, value: float = 1.0, tags: dict[str, Any] | Non
 
 def observe_duration_ms(name: str, *, duration_ms: float, tags: dict[str, Any] | None = None) -> None:
     _registry.record_duration_ms(name, duration_ms=duration_ms, tags=tags)
+
+
+def prometheus_export(*, window_minutes: int = 60) -> str:
+    """Module-level shortcut for Prometheus text export."""
+    return _registry.prometheus_export(window_minutes=window_minutes)
+
+
+def _prometheus_name(name: str) -> str:
+    """Convert a dotted metric name to a Prometheus-safe identifier."""
+    return "tradingbot_" + name.replace(".", "_").replace("-", "_")
+
+
+def _prometheus_labels(tags: dict[str, str]) -> str:
+    """Render a Prometheus label set string like {key="val",key2="val2"}."""
+    if not tags:
+        return ""
+    pairs = ",".join(f'{k}="{v}"' for k, v in sorted(tags.items()))
+    return "{" + pairs + "}"
+
+
+def _prometheus_quantile_labels(quantile: str, tags: dict[str, str]) -> str:
+    """Render a Prometheus label set with a quantile dimension."""
+    parts = [f'quantile="{quantile}"']
+    for k, v in sorted(tags.items()):
+        parts.append(f'{k}="{v}"')
+    return "{" + ",".join(parts) + "}"
