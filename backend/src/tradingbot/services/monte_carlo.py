@@ -9,15 +9,15 @@ Provides:
 
 from __future__ import annotations
 
-import hashlib
+
 import logging
 import random
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from statistics import mean, median, pstdev, quantiles
+from statistics import mean, median, pstdev
 from typing import Any
 
-from tradingbot.services.metrics import observe_counter, observe_duration_ms
+from tradingbot.services.metrics import observe_counter
 
 logger = logging.getLogger(__name__)
 

@@ -9,23 +9,20 @@ Provides a framework for long-running WebSocket connections with:
 
 from __future__ import annotations
 
-import json
 import logging
 import threading
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
-from time import perf_counter, sleep
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from time import perf_counter
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 
 from tradingbot.config import get_settings
 from tradingbot.db import get_session_factory
 from tradingbot.enums import TradingMode
-from tradingbot.services.adapters import BrokerOrder, BrokerFill, BrokerOrderEvent, build_broker_adapter
+from tradingbot.services.adapters import BrokerOrderEvent, build_broker_adapter
 from tradingbot.services.execution import ExecutionService
-from tradingbot.services.metrics import observe_counter, observe_duration_ms
+from tradingbot.services.metrics import observe_counter
 from tradingbot.services.otel import child_span
 from tradingbot.services.store import ensure_bot_settings
 

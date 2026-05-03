@@ -17,10 +17,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean
 from typing import Any
 
-from tradingbot.services.metrics import observe_counter, observe_duration_ms
+from tradingbot.services.metrics import observe_counter
 
 logger = logging.getLogger(__name__)
 
@@ -288,7 +288,7 @@ class GradientBoostSignalModel(MLSignalModel):
 
         # Training metrics
         predictions = [self._predict_raw(row) for row in labeled]
-        mse = mean([(p - l) ** 2 for p, l in zip(predictions, labels)])
+        mse = mean([(p - lab) ** 2 for p, lab in zip(predictions, labels)])
         observe_counter("ml.training_completed", tags={"model": self.model_name})
 
         return {

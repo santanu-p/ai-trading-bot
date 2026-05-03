@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any
 
-from tradingbot.services.metrics import observe_counter, observe_duration_ms
+from tradingbot.services.metrics import observe_counter
 
 logger = logging.getLogger(__name__)
 
