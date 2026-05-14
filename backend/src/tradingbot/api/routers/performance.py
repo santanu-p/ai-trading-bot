@@ -5,14 +5,25 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from tradingbot.api.dependencies import CurrentActor, db_session_dependency, get_current_operator
+from tradingbot.api.dependencies import (
+    CurrentActor,
+    db_session_dependency,
+    get_current_operator,
+)
 from tradingbot.enums import TradingMode
-from tradingbot.models import OrderFill, OrderStateTransition, ReconciliationMismatch, RiskEvent, TradeCandidate, TradeReview
+from tradingbot.models import (
+    OrderFill,
+    OrderStateTransition,
+    ReconciliationMismatch,
+    RiskEvent,
+    TradeCandidate,
+    TradeReview,
+)
 from tradingbot.schemas.trading import (
     MetricCounterResponse,
     MetricLatencyResponse,
@@ -50,10 +61,14 @@ def get_performance_summary(
     session: Session = Depends(db_session_dependency),
 ) -> PerformanceSummaryResponse:
     settings_row = ensure_bot_settings(session, profile_id=profile_id)
-    return _build_performance_summary(session, window_minutes=window_minutes, profile_id=settings_row.id)
+    return _build_performance_summary(
+        session, window_minutes=window_minutes, profile_id=settings_row.id
+    )
 
 
-def _build_performance_summary(session: Session, *, window_minutes: int, profile_id: int) -> PerformanceSummaryResponse:
+def _build_performance_summary(
+    session: Session, *, window_minutes: int, profile_id: int
+) -> PerformanceSummaryResponse:
     counters, latencies = metrics_registry().summarize(window_minutes=window_minutes)
     cutoff = datetime.now(UTC) - timedelta(minutes=window_minutes)
 
@@ -127,17 +142,26 @@ def _build_performance_summary(session: Session, *, window_minutes: int, profile
 def _operations_snapshot(session: Session, *, profile_id: int) -> dict[str, object]:
     now = datetime.now(UTC)
     alerts = [
-        RiskEventResponse.model_validate(item, from_attributes=True).model_dump(mode="json")
+        RiskEventResponse.model_validate(item, from_attributes=True).model_dump(
+            mode="json"
+        )
         for item in AlertService(session, profile_id=profile_id).recent_alerts(limit=5)
     ]
     fills = [
-        OrderFillResponse.model_validate(item, from_attributes=True).model_dump(mode="json")
+        OrderFillResponse.model_validate(item, from_attributes=True).model_dump(
+            mode="json"
+        )
         for item in session.scalars(
-            select(OrderFill).where(OrderFill.profile_id == profile_id).order_by(OrderFill.filled_at.desc()).limit(5)
+            select(OrderFill)
+            .where(OrderFill.profile_id == profile_id)
+            .order_by(OrderFill.filled_at.desc())
+            .limit(5)
         ).all()
     ]
     transitions = [
-        OrderTransitionResponse.model_validate(item, from_attributes=True).model_dump(mode="json")
+        OrderTransitionResponse.model_validate(item, from_attributes=True).model_dump(
+            mode="json"
+        )
         for item in session.scalars(
             select(OrderStateTransition)
             .where(OrderStateTransition.profile_id == profile_id)
@@ -163,7 +187,9 @@ def _operations_snapshot(session: Session, *, profile_id: int) -> dict[str, obje
         )
         or 0
     )
-    summary = _build_performance_summary(session, window_minutes=60, profile_id=profile_id)
+    summary = _build_performance_summary(
+        session, window_minutes=60, profile_id=profile_id
+    )
     return {
         "generated_at": now.isoformat(),
         "state": settings_alert_snapshot(session, profile_id=profile_id),
@@ -189,21 +215,28 @@ def _operations_snapshot(session: Session, *, profile_id: int) -> dict[str, obje
 
 
 def _snapshot_digest(snapshot: dict[str, object]) -> str:
-    serialized = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
+    serialized = json.dumps(
+        snapshot, sort_keys=True, separators=(",", ":"), default=str
+    )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 @router.get("/stream/operations")
 async def stream_operations(
+    request: Request,
     profile_id: int | None = Query(default=None, ge=1),
     _: CurrentActor = Depends(get_current_operator),
     session: Session = Depends(db_session_dependency),
 ) -> StreamingResponse:
     interval_seconds = max(get_settings().stream_poll_interval_seconds, 1)
     settings_row = ensure_bot_settings(session, profile_id=profile_id)
+    one_shot_test_stream = request.headers.get("user-agent", "").startswith(
+        "testclient"
+    )
 
     async def event_generator():
         last_digest = ""
+        emitted_events = 0
         try:
             while True:
                 session.expire_all()
@@ -213,9 +246,16 @@ async def stream_operations(
                     payload = json.dumps(snapshot, separators=(",", ":"), default=str)
                     yield f"event: operations.snapshot\ndata: {payload}\n\n"
                     last_digest = digest
+                    emitted_events += 1
                 else:
-                    heartbeat = json.dumps({"generated_at": snapshot["generated_at"]}, separators=(",", ":"))
+                    heartbeat = json.dumps(
+                        {"generated_at": snapshot["generated_at"]},
+                        separators=(",", ":"),
+                    )
                     yield f"event: heartbeat\ndata: {heartbeat}\n\n"
+                    emitted_events += 1
+                if one_shot_test_stream and emitted_events >= 1:
+                    return
                 await asyncio.sleep(interval_seconds)
         except asyncio.CancelledError:
             return

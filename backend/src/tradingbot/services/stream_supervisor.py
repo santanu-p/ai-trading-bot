@@ -62,8 +62,12 @@ class StreamStatus:
     def to_payload(self) -> dict[str, Any]:
         return {
             "connected": self.connected,
-            "last_event_at": self.last_event_at.isoformat() if self.last_event_at else None,
-            "last_heartbeat_at": self.last_heartbeat_at.isoformat() if self.last_heartbeat_at else None,
+            "last_event_at": self.last_event_at.isoformat()
+            if self.last_event_at
+            else None,
+            "last_heartbeat_at": self.last_heartbeat_at.isoformat()
+            if self.last_heartbeat_at
+            else None,
             "reconnect_count": self.reconnect_count,
             "events_processed": self.events_processed,
             "errors": self.errors,
@@ -117,16 +121,24 @@ class StreamSupervisor(ABC):
         self.status.started_at = datetime.now(UTC)
         self.status.stopped_at = None
         self._stop_event.clear()
-        logger.info("stream_supervisor.starting", extra={"profile_id": self.config.profile_id})
+        logger.info(
+            "stream_supervisor.starting", extra={"profile_id": self.config.profile_id}
+        )
 
         attempt = 0
-        while not self._stop_event.is_set() and attempt < self.config.max_reconnect_attempts:
+        while (
+            not self._stop_event.is_set()
+            and attempt < self.config.max_reconnect_attempts
+        ):
             try:
                 self._connect()
                 self.status.connected = True
-                self.status.reconnect_count += (1 if attempt > 0 else 0)
+                self.status.reconnect_count += 1 if attempt > 0 else 0
                 attempt = 0  # Reset on successful connect
-                observe_counter("stream.connected", tags={"profile_id": str(self.config.profile_id or "default")})
+                observe_counter(
+                    "stream.connected",
+                    tags={"profile_id": str(self.config.profile_id or "default")},
+                )
 
                 if self.config.backfill_on_reconnect and self.status.last_event_at:
                     self._backfill_from_rest()
@@ -135,10 +147,17 @@ class StreamSupervisor(ABC):
             except Exception as exc:
                 self.status.connected = False
                 self.status.errors += 1
-                observe_counter("stream.errors", tags={"profile_id": str(self.config.profile_id or "default")})
+                observe_counter(
+                    "stream.errors",
+                    tags={"profile_id": str(self.config.profile_id or "default")},
+                )
                 logger.warning(
                     "stream_supervisor.connection_error",
-                    extra={"error": str(exc), "attempt": attempt, "profile_id": self.config.profile_id},
+                    extra={
+                        "error": str(exc),
+                        "attempt": attempt,
+                        "profile_id": self.config.profile_id,
+                    },
                     exc_info=exc,
                 )
             finally:
@@ -153,18 +172,25 @@ class StreamSupervisor(ABC):
 
             # Exponential backoff
             delay = min(
-                self.config.reconnect_base_delay_seconds * (self.config.reconnect_backoff_multiplier ** attempt),
+                self.config.reconnect_base_delay_seconds
+                * (self.config.reconnect_backoff_multiplier**attempt),
                 self.config.reconnect_max_delay_seconds,
             )
             attempt += 1
             logger.info(
                 "stream_supervisor.reconnecting",
-                extra={"delay_seconds": delay, "attempt": attempt, "profile_id": self.config.profile_id},
+                extra={
+                    "delay_seconds": delay,
+                    "attempt": attempt,
+                    "profile_id": self.config.profile_id,
+                },
             )
             self._stop_event.wait(timeout=delay)
 
         self.status.stopped_at = datetime.now(UTC)
-        logger.info("stream_supervisor.stopped", extra={"profile_id": self.config.profile_id})
+        logger.info(
+            "stream_supervisor.stopped", extra={"profile_id": self.config.profile_id}
+        )
 
     def stop(self) -> None:
         """Signal the supervisor to stop."""
@@ -186,12 +212,16 @@ class StreamSupervisor(ABC):
                     self.status.last_heartbeat_at = datetime.now(UTC)
                     last_heartbeat = perf_counter()
                 except Exception as exc:
-                    logger.warning("stream_supervisor.heartbeat_failed", extra={"error": str(exc)})
+                    logger.warning(
+                        "stream_supervisor.heartbeat_failed", extra={"error": str(exc)}
+                    )
                     break  # Force reconnect
 
             # Heartbeat timeout check
             if self.status.last_heartbeat_at:
-                since_heartbeat = (datetime.now(UTC) - self.status.last_heartbeat_at).total_seconds()
+                since_heartbeat = (
+                    datetime.now(UTC) - self.status.last_heartbeat_at
+                ).total_seconds()
                 if since_heartbeat > self.config.heartbeat_timeout_seconds:
                     logger.warning("stream_supervisor.heartbeat_timeout")
                     break
@@ -202,7 +232,9 @@ class StreamSupervisor(ABC):
                 continue
 
             try:
-                with child_span(operation="stream.process_event", service="stream_supervisor"):
+                with child_span(
+                    operation="stream.process_event", service="stream_supervisor"
+                ):
                     event = self._parse_event(raw)
                     if event is not None:
                         self._process_event(event)
@@ -210,18 +242,27 @@ class StreamSupervisor(ABC):
                         self.status.last_event_at = datetime.now(UTC)
                         observe_counter(
                             "stream.events_processed",
-                            tags={"event_type": event.event_type, "profile_id": str(self.config.profile_id or "default")},
+                            tags={
+                                "event_type": event.event_type,
+                                "profile_id": str(self.config.profile_id or "default"),
+                            },
                         )
             except Exception as exc:
                 self.status.errors += 1
                 observe_counter("stream.event_errors")
-                logger.warning("stream_supervisor.event_processing_error", extra={"error": str(exc)}, exc_info=exc)
+                logger.warning(
+                    "stream_supervisor.event_processing_error",
+                    extra={"error": str(exc)},
+                    exc_info=exc,
+                )
 
     def _process_event(self, event: BrokerOrderEvent) -> None:
         """Process a broker order event through the execution service."""
         session = get_session_factory()()
         try:
-            settings_row = ensure_bot_settings(session, profile_id=self.config.profile_id)
+            settings_row = ensure_bot_settings(
+                session, profile_id=self.config.profile_id
+            )
             broker = build_broker_adapter(session, settings_row)
             execution = ExecutionService(session, broker, settings_row)
 
@@ -236,7 +277,9 @@ class StreamSupervisor(ABC):
                     .where(OrderRecord.profile_id == settings_row.id)
                 )
                 if local_order is not None:
-                    execution.apply_broker_order_update(local_order, event.order, source="stream")
+                    execution.apply_broker_order_update(
+                        local_order, event.order, source="stream"
+                    )
 
             if event.fill is not None:
                 execution.ingest_broker_fill(event.fill, source="stream")
@@ -244,7 +287,9 @@ class StreamSupervisor(ABC):
             session.commit()
         except Exception as exc:
             session.rollback()
-            logger.warning("stream_supervisor.db_error", extra={"error": str(exc)}, exc_info=exc)
+            logger.warning(
+                "stream_supervisor.db_error", extra={"error": str(exc)}, exc_info=exc
+            )
         finally:
             session.close()
 
@@ -252,7 +297,9 @@ class StreamSupervisor(ABC):
         """Backfill missed events from the REST API after a reconnect."""
         session = get_session_factory()()
         try:
-            settings_row = ensure_bot_settings(session, profile_id=self.config.profile_id)
+            settings_row = ensure_bot_settings(
+                session, profile_id=self.config.profile_id
+            )
             broker = build_broker_adapter(session, settings_row)
             execution = ExecutionService(session, broker, settings_row)
 
@@ -267,14 +314,20 @@ class StreamSupervisor(ABC):
                     .where(OrderRecord.profile_id == settings_row.id)
                 )
                 if local is not None:
-                    execution.apply_broker_order_update(local, broker_order, source="stream_backfill")
+                    execution.apply_broker_order_update(
+                        local, broker_order, source="stream_backfill"
+                    )
 
             session.commit()
             observe_counter("stream.backfill_completed")
             logger.info("stream_supervisor.backfill_completed")
         except Exception as exc:
             session.rollback()
-            logger.warning("stream_supervisor.backfill_error", extra={"error": str(exc)}, exc_info=exc)
+            logger.warning(
+                "stream_supervisor.backfill_error",
+                extra={"error": str(exc)},
+                exc_info=exc,
+            )
         finally:
             session.close()
 
@@ -307,13 +360,19 @@ class AlpacaStreamSupervisor(StreamSupervisor):
         else:
             base = settings.alpaca_paper_base_url.rstrip("/")
         # Alpaca streaming endpoint
-        return base.replace("https://", "wss://").replace("http://", "ws://") + "/stream"
+        return (
+            base.replace("https://", "wss://").replace("http://", "ws://") + "/stream"
+        )
 
     def _get_credentials(self) -> tuple[str, str]:
         settings = get_settings()
         if self.mode == TradingMode.LIVE:
-            return settings.alpaca_live_api_key or settings.alpaca_api_key, settings.alpaca_live_api_secret or settings.alpaca_api_secret
-        return settings.alpaca_paper_api_key or settings.alpaca_api_key, settings.alpaca_paper_api_secret or settings.alpaca_api_secret
+            key = settings.alpaca_live_api_key or settings.alpaca_api_key
+            secret = settings.alpaca_live_api_secret or settings.alpaca_api_secret
+        else:
+            key = settings.alpaca_paper_api_key or settings.alpaca_api_key
+            secret = settings.alpaca_paper_api_secret or settings.alpaca_api_secret
+        return key or "", secret or ""
 
     def _connect(self) -> None:
         """Connect to Alpaca WebSocket and authenticate."""
@@ -324,7 +383,11 @@ class AlpacaStreamSupervisor(StreamSupervisor):
         self._connected = True
         logger.info(
             "alpaca_stream.connected",
-            extra={"mode": self.mode.value, "url": self._ws_url, "profile_id": self.config.profile_id},
+            extra={
+                "mode": self.mode.value,
+                "url": self._ws_url,
+                "profile_id": self.config.profile_id,
+            },
         )
 
     def _read_event(self) -> dict[str, Any] | None:
@@ -348,7 +411,9 @@ class AlpacaStreamSupervisor(StreamSupervisor):
         try:
             session = get_session_factory()()
             try:
-                settings_row = ensure_bot_settings(session, profile_id=self.config.profile_id)
+                settings_row = ensure_bot_settings(
+                    session, profile_id=self.config.profile_id
+                )
                 broker = build_broker_adapter(session, settings_row)
                 open_orders = broker.list_open_orders()
                 # Return as synthetic events
@@ -379,12 +444,16 @@ class AlpacaStreamSupervisor(StreamSupervisor):
                 raw=raw,
             )
         except Exception as exc:
-            logger.warning("alpaca_stream.parse_error", extra={"error": str(exc), "raw": raw})
+            logger.warning(
+                "alpaca_stream.parse_error", extra={"error": str(exc), "raw": raw}
+            )
             return None
 
     def _disconnect(self) -> None:
         self._connected = False
-        logger.info("alpaca_stream.disconnected", extra={"profile_id": self.config.profile_id})
+        logger.info(
+            "alpaca_stream.disconnected", extra={"profile_id": self.config.profile_id}
+        )
 
     def _send_heartbeat(self) -> None:
         """Send a heartbeat (no-op for REST polling mode)."""
@@ -429,7 +498,9 @@ def start_supervisor(
         _supervisor_threads[key] = thread
         thread.start()
 
-    observe_counter("stream.supervisor_started", tags={"profile_id": str(profile_id or "default")})
+    observe_counter(
+        "stream.supervisor_started", tags={"profile_id": str(profile_id or "default")}
+    )
     return supervisor.status
 
 
@@ -447,7 +518,9 @@ def stop_supervisor(*, profile_id: int | None = None) -> StreamStatus | None:
     if thread is not None:
         thread.join(timeout=10)
 
-    observe_counter("stream.supervisor_stopped", tags={"profile_id": str(profile_id or "default")})
+    observe_counter(
+        "stream.supervisor_stopped", tags={"profile_id": str(profile_id or "default")}
+    )
     return supervisor.status
 
 

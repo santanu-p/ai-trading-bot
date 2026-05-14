@@ -1,0 +1,10 @@
+[
+  {
+    "symbols": ["RELIANCE.NSE"],
+    "headline": "Reliance sample import keeps India paper profile testable",
+    "summary": "Synthetic fixture news for local india-paper validation.",
+    "source": "sample-fixture",
+    "created_at": "2026-05-14T04:05:00+00:00",
+    "sentiment_hint": "neutral sample fixture"
+  }
+]

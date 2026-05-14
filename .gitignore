@@ -11,6 +11,7 @@ __pycache__/
 *.pyc.*
 *.pyo
 node_modules/
+*.tsbuildinfo
 .npm-cache/
 web/.npm-cache/
 dist/

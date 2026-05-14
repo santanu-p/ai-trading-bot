@@ -123,10 +123,29 @@ class WashSaleResult:
             "symbol": self.symbol,
             "is_wash_sale": self.is_wash_sale,
             "sell_date": self.sell_date.isoformat() if self.sell_date else None,
-            "repurchase_date": self.repurchase_date.isoformat() if self.repurchase_date else None,
+            "repurchase_date": self.repurchase_date.isoformat()
+            if self.repurchase_date
+            else None,
             "days_between": self.days_between,
             "disallowed_loss": round(self.disallowed_loss, 2),
         }
+
+
+def _review_datetime(review: TradeReview, key: str) -> datetime | None:
+    value = review.review_payload.get(key)
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    if key == "entry_time":
+        return review.created_at
+    if key == "exit_time":
+        return review.reviewed_at or review.created_at
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +179,9 @@ class ComplianceService:
             TradeReview.created_at < end_of_day,
         )
         if self.profile_id is not None:
-            reviews_query = reviews_query.where(TradeReview.profile_id == self.profile_id)
+            reviews_query = reviews_query.where(
+                TradeReview.profile_id == self.profile_id
+            )
         reviews = list(self.session.scalars(reviews_query).all())
 
         winning = [r for r in reviews if r.pnl >= 0]
@@ -183,9 +204,13 @@ class ComplianceService:
         canceled = sum(1 for o in orders if o.status == OrderStatus.CANCELED)
 
         # Risk events
-        risk_query = select(func.count()).select_from(RiskEvent).where(
-            RiskEvent.created_at >= start_of_day,
-            RiskEvent.created_at < end_of_day,
+        risk_query = (
+            select(func.count())
+            .select_from(RiskEvent)
+            .where(
+                RiskEvent.created_at >= start_of_day,
+                RiskEvent.created_at < end_of_day,
+            )
         )
         if self.profile_id is not None:
             risk_query = risk_query.where(RiskEvent.profile_id == self.profile_id)
@@ -227,7 +252,11 @@ class ComplianceService:
                 action="compliance.daily_report_generated",
                 actor="system",
                 actor_role="system",
-                details={"date": as_of.isoformat(), "total_trades": total, "pnl": report.total_pnl},
+                details={
+                    "date": as_of.isoformat(),
+                    "total_trades": total,
+                    "pnl": report.total_pnl,
+                },
             )
         )
         observe_counter("compliance.daily_report_generated")
@@ -254,7 +283,9 @@ class ComplianceService:
             .order_by(TradeReview.created_at)
         )
         if self.profile_id is not None:
-            reviews_query = reviews_query.where(TradeReview.profile_id == self.profile_id)
+            reviews_query = reviews_query.where(
+                TradeReview.profile_id == self.profile_id
+            )
         reviews = list(self.session.scalars(reviews_query).all())
 
         # Detect day trades: same symbol, opened and closed on same calendar day
@@ -262,20 +293,26 @@ class ComplianceService:
         seen: dict[tuple[str, str], bool] = {}
 
         for review in reviews:
-            entry_time = review.entry_time
-            exit_time = review.exit_time
+            entry_time = _review_datetime(review, "entry_time")
+            exit_time = _review_datetime(review, "exit_time")
             if entry_time and exit_time:
-                entry_date = entry_time.date() if hasattr(entry_time, "date") else entry_time
-                exit_date = exit_time.date() if hasattr(exit_time, "date") else exit_time
+                entry_date = (
+                    entry_time.date() if hasattr(entry_time, "date") else entry_time
+                )
+                exit_date = (
+                    exit_time.date() if hasattr(exit_time, "date") else exit_time
+                )
                 if entry_date == exit_date:
                     key = (review.symbol, str(entry_date))
                     if key not in seen:
                         seen[key] = True
-                        day_trades.append({
-                            "symbol": review.symbol,
-                            "date": str(entry_date),
-                            "pnl": round(review.pnl, 2),
-                        })
+                        day_trades.append(
+                            {
+                                "symbol": review.symbol,
+                                "date": str(entry_date),
+                                "pnl": round(review.pnl, 2),
+                            }
+                        )
 
         is_pdt = len(day_trades) >= day_trade_limit
         if is_pdt:
@@ -308,7 +345,9 @@ class ComplianceService:
             .order_by(TradeReview.created_at)
         )
         if self.profile_id is not None:
-            reviews_query = reviews_query.where(TradeReview.profile_id == self.profile_id)
+            reviews_query = reviews_query.where(
+                TradeReview.profile_id == self.profile_id
+            )
         reviews = list(self.session.scalars(reviews_query).all())
 
         # Group by symbol
@@ -318,18 +357,20 @@ class ComplianceService:
 
         results: list[WashSaleResult] = []
         for symbol, trades in by_symbol.items():
-            loss_trades = [t for t in trades if t.pnl < 0 and t.exit_time]
-            buy_trades = [t for t in trades if t.entry_time]
+            loss_trades = [
+                t for t in trades if t.pnl < 0 and _review_datetime(t, "exit_time")
+            ]
+            buy_trades = [t for t in trades if _review_datetime(t, "entry_time")]
 
             for loss_trade in loss_trades:
-                sell_date = loss_trade.exit_time
+                sell_date = _review_datetime(loss_trade, "exit_time")
                 if sell_date is None:
                     continue
 
                 for buy_trade in buy_trades:
                     if buy_trade == loss_trade:
                         continue
-                    buy_date = buy_trade.entry_time
+                    buy_date = _review_datetime(buy_trade, "entry_time")
                     if buy_date is None:
                         continue
 
@@ -345,7 +386,9 @@ class ComplianceService:
                                 disallowed_loss=abs(loss_trade.pnl),
                             )
                         )
-                        observe_counter("compliance.wash_sale_detected", tags={"symbol": symbol})
+                        observe_counter(
+                            "compliance.wash_sale_detected", tags={"symbol": symbol}
+                        )
                         break  # One match per loss trade is enough
 
         return results
@@ -360,21 +403,29 @@ class ComplianceService:
         """Check portfolio positions against concentration limits."""
         positions_query = select(PositionRecord).where(PositionRecord.quantity > 0)
         if self.profile_id is not None:
-            positions_query = positions_query.where(PositionRecord.profile_id == self.profile_id)
+            positions_query = positions_query.where(
+                PositionRecord.profile_id == self.profile_id
+            )
         positions = list(self.session.scalars(positions_query).all())
 
         violations: list[dict[str, Any]] = []
         for pos in positions:
-            market_value = abs(float(pos.quantity or 0) * float(pos.average_entry_price or 0))
+            market_value = abs(
+                float(pos.quantity or 0) * float(pos.average_entry_price or 0)
+            )
             position_pct = (market_value / max(portfolio_equity, 1.0)) * 100
             if position_pct > max_single_position_pct:
-                violations.append({
-                    "type": "single_position_limit",
-                    "symbol": pos.symbol,
-                    "position_pct": round(position_pct, 2),
-                    "limit_pct": max_single_position_pct,
-                    "market_value": round(market_value, 2),
-                })
-                observe_counter("compliance.position_limit_violation", tags={"symbol": pos.symbol})
+                violations.append(
+                    {
+                        "type": "single_position_limit",
+                        "symbol": pos.symbol,
+                        "position_pct": round(position_pct, 2),
+                        "limit_pct": max_single_position_pct,
+                        "market_value": round(market_value, 2),
+                    }
+                )
+                observe_counter(
+                    "compliance.position_limit_violation", tags={"symbol": pos.symbol}
+                )
 
         return violations

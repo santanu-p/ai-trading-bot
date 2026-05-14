@@ -135,7 +135,9 @@ def build_feature_matrix(
     for i, snapshot in enumerate(feature_snapshots):
         symbol = symbols[i] if symbols and i < len(symbols) else f"SYM_{i}"
         features = {name: float(snapshot.get(name, 0.0)) for name in names}
-        rows.append(FeatureRow(symbol=symbol, features=features, timestamp=datetime.now(UTC)))
+        rows.append(
+            FeatureRow(symbol=symbol, features=features, timestamp=datetime.now(UTC))
+        )
     return rows
 
 
@@ -256,11 +258,14 @@ class GradientBoostSignalModel(MLSignalModel):
 
         labeled = [row for row in training_data if row.label is not None]
         if len(labeled) < 10:
-            return {"error": "Insufficient labeled samples (need >= 10).", "samples": len(labeled)}
+            return {
+                "error": "Insufficient labeled samples (need >= 10).",
+                "samples": len(labeled),
+            }
 
         feature_names = list(labeled[0].features.keys())
-        labels = [row.label for row in labeled]  # type: ignore[arg-type]
-        self._initial_prediction = mean(labels)
+        labels = [float(row.label) for row in labeled if row.label is not None]
+        self._initial_prediction = float(mean(labels))
 
         # Gradient boosting: iteratively fit stumps to residuals
         residuals = [label - self._initial_prediction for label in labels]
@@ -272,7 +277,9 @@ class GradientBoostSignalModel(MLSignalModel):
             if best_stump is None:
                 break
             self._stumps.append(best_stump)
-            feature_usage[best_stump.feature] = feature_usage.get(best_stump.feature, 0) + 1
+            feature_usage[best_stump.feature] = (
+                feature_usage.get(best_stump.feature, 0) + 1
+            )
 
             # Update residuals
             for i, row in enumerate(labeled):
@@ -283,12 +290,14 @@ class GradientBoostSignalModel(MLSignalModel):
                     residuals[i] -= self._learning_rate * best_stump.right_value
 
         total_usage = sum(feature_usage.values()) or 1
-        self._feature_importances = {k: round(v / total_usage, 4) for k, v in feature_usage.items()}
+        self._feature_importances = {
+            k: round(v / total_usage, 4) for k, v in feature_usage.items()
+        }
         self._trained_at = datetime.now(UTC)
 
         # Training metrics
         predictions = [self._predict_raw(row) for row in labeled]
-        mse = mean([(p - lab) ** 2 for p, lab in zip(predictions, labels)])
+        mse = float(mean([(p - lab) ** 2 for p, lab in zip(predictions, labels)]))
         observe_counter("ml.training_completed", tags={"model": self.model_name})
 
         return {
@@ -330,11 +339,17 @@ class GradientBoostSignalModel(MLSignalModel):
             # Try a few candidate thresholds
             n_candidates = min(len(unique_values) - 1, 20)
             step = max(len(unique_values) // n_candidates, 1)
-            candidates = [unique_values[i] for i in range(0, len(unique_values) - 1, step)]
+            candidates = [
+                unique_values[i] for i in range(0, len(unique_values) - 1, step)
+            ]
 
             for threshold in candidates:
-                left_residuals = [r for v, r in zip(values, residuals) if v <= threshold]
-                right_residuals = [r for v, r in zip(values, residuals) if v > threshold]
+                left_residuals = [
+                    r for v, r in zip(values, residuals) if v <= threshold
+                ]
+                right_residuals = [
+                    r for v, r in zip(values, residuals) if v > threshold
+                ]
 
                 if not left_residuals or not right_residuals:
                     continue
@@ -381,7 +396,9 @@ class GradientBoostSignalModel(MLSignalModel):
         }
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        logger.info("ml.model_saved", extra={"path": str(target), "stumps": len(self._stumps)})
+        logger.info(
+            "ml.model_saved", extra={"path": str(target), "stumps": len(self._stumps)}
+        )
         return target
 
     def load(self, path: Path) -> None:
@@ -403,7 +420,9 @@ class GradientBoostSignalModel(MLSignalModel):
             )
             for s in data.get("stumps", [])
         ]
-        logger.info("ml.model_loaded", extra={"path": str(path), "stumps": len(self._stumps)})
+        logger.info(
+            "ml.model_loaded", extra={"path": str(path), "stumps": len(self._stumps)}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -425,8 +444,12 @@ def blend_signals(
     normalized_ml = ml_weight / total_weight
     normalized_llm = llm_weight / total_weight
 
-    blended_score = (ml_signal.score * normalized_ml) + (llm_confidence * normalized_llm)
-    blended_confidence = (ml_signal.confidence * normalized_ml) + (llm_confidence * normalized_llm)
+    blended_score = (ml_signal.score * normalized_ml) + (
+        llm_confidence * normalized_llm
+    )
+    blended_confidence = (ml_signal.confidence * normalized_ml) + (
+        llm_confidence * normalized_llm
+    )
 
     return BlendedSignal(
         symbol=ml_signal.symbol,
