@@ -8,7 +8,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tradingbot.enums import OrderIntent, OrderStatus
-from tradingbot.models import AgentRun, ExecutionIntent, OrderRecord, RiskEvent, TradeReview
+from tradingbot.models import (
+    AgentRun,
+    ExecutionIntent,
+    OrderRecord,
+    RiskEvent,
+    TradeReview,
+)
 
 
 class DecisionAuditService:
@@ -17,13 +23,17 @@ class DecisionAuditService:
         self.profile_id = profile_id
 
     def audit_recent_runs(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        query = select(AgentRun).order_by(AgentRun.created_at.desc()).limit(max(limit, 1))
+        query = (
+            select(AgentRun).order_by(AgentRun.created_at.desc()).limit(max(limit, 1))
+        )
         if self.profile_id is not None:
             query = query.where(AgentRun.profile_id == self.profile_id)
 
         rows: list[dict[str, Any]] = []
         for run in self.session.scalars(query).all():
-            payload = run.decision_payload if isinstance(run.decision_payload, dict) else {}
+            payload = (
+                run.decision_payload if isinstance(run.decision_payload, dict) else {}
+            )
             issues: list[str] = []
             score = 1.0
             confidence = _optional_float(payload.get("confidence"), fallback=0.0) or 0.0
@@ -85,18 +95,40 @@ class TradeReviewService:
         if order.direction != OrderIntent.SELL or order.status != OrderStatus.FILLED:
             return None
 
-        existing = self.session.scalar(select(TradeReview).where(TradeReview.order_id == order.id))
+        existing = self.session.scalar(
+            select(TradeReview).where(TradeReview.order_id == order.id)
+        )
         if existing is not None:
             return existing
 
-        parent = self.session.get(OrderRecord, order.parent_order_id) if order.parent_order_id else None
+        parent = (
+            self.session.get(OrderRecord, order.parent_order_id)
+            if order.parent_order_id
+            else None
+        )
         if parent is None:
             return None
 
-        quantity = max(min(parent.filled_quantity or parent.quantity, order.filled_quantity or order.quantity), 0)
-        entry_price = parent.average_fill_price or parent.limit_price or _decision_entry(parent.metadata_json)
+        quantity = max(
+            min(
+                parent.filled_quantity or parent.quantity,
+                order.filled_quantity or order.quantity,
+            ),
+            0,
+        )
+        entry_price = (
+            parent.average_fill_price
+            or parent.limit_price
+            or _decision_entry(parent.metadata_json)
+        )
         exit_price = order.average_fill_price or order.limit_price or order.stop_price
-        if quantity <= 0 or entry_price is None or entry_price <= 0 or exit_price is None or exit_price <= 0:
+        if (
+            quantity <= 0
+            or entry_price is None
+            or entry_price <= 0
+            or exit_price is None
+            or exit_price <= 0
+        ):
             return None
 
         pnl = (exit_price - entry_price) * quantity
@@ -137,6 +169,12 @@ class TradeReviewService:
             review_payload={
                 "entry_price": round(entry_price, 6),
                 "exit_price": round(exit_price, 6),
+                "entry_time": (parent.submitted_at or parent.created_at).isoformat(),
+                "exit_time": (
+                    order.last_broker_update_at
+                    or order.submitted_at
+                    or order.created_at
+                ).isoformat(),
                 "quantity": quantity,
                 "thesis": decision_payload.get("thesis"),
                 "risk_notes": decision_payload.get("risk_notes", []),
@@ -180,7 +218,9 @@ class TradeReviewService:
             bucket["score_total"] += row.review_score
             bucket["return_total"] += row.return_pct
             if row.loss_cause:
-                bucket["loss_causes"][row.loss_cause] = bucket["loss_causes"].get(row.loss_cause, 0) + 1
+                bucket["loss_causes"][row.loss_cause] = (
+                    bucket["loss_causes"].get(row.loss_cause, 0) + 1
+                )
 
         summaries: list[dict[str, Any]] = []
         for bucket in grouped.values():
@@ -196,9 +236,15 @@ class TradeReviewService:
                     "loss_causes": bucket["loss_causes"],
                 }
             )
-        return sorted(summaries, key=lambda item: (item["avg_score"], item["reviewed_trades"]), reverse=True)
+        return sorted(
+            summaries,
+            key=lambda item: (item["avg_score"], item["reviewed_trades"]),
+            reverse=True,
+        )
 
-    def _run_metadata(self, parent: OrderRecord) -> tuple[str | None, str | None, dict[str, str]]:
+    def _run_metadata(
+        self, parent: OrderRecord
+    ) -> tuple[str | None, str | None, dict[str, str]]:
         execution_intent_id = parent.execution_intent_id
         if not execution_intent_id:
             return None, None, {}
@@ -229,12 +275,23 @@ class TradeReviewService:
                 return "bad_execution"
 
         structured_events = decision_payload.get("structured_events", [])
-        if any(item.get("significance") == "high" for item in structured_events if isinstance(item, dict)):
+        if any(
+            item.get("significance") == "high"
+            for item in structured_events
+            if isinstance(item, dict)
+        ):
             return "bad_context"
 
-        risk_notes = [str(item).lower() for item in decision_payload.get("risk_notes", [])]
-        committee_notes = [str(item).lower() for item in decision_payload.get("committee_notes", [])]
-        if any("gap" in note or "risk" in note or "cooldown" in note for note in risk_notes + committee_notes):
+        risk_notes = [
+            str(item).lower() for item in decision_payload.get("risk_notes", [])
+        ]
+        committee_notes = [
+            str(item).lower() for item in decision_payload.get("committee_notes", [])
+        ]
+        if any(
+            "gap" in note or "risk" in note or "cooldown" in note
+            for note in risk_notes + committee_notes
+        ):
             return "avoidable_risk"
 
         move_pct = (exit_price - entry_price) / max(entry_price, 1e-6)

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import type { Route } from "next";
 import { type FormEvent, startTransition, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -145,7 +146,7 @@ function defaultExecutionQualityFilters(): ExecutionQualityFilters {
   };
 }
 
-const sections: Array<{ href: string; label: string; key: SectionName }> = [
+const sections: Array<{ href: Route; label: string; key: SectionName }> = [
   { href: "/", label: "Overview", key: "overview" },
   { href: "/orders", label: "Orders", key: "orders" },
   { href: "/decisions", label: "Decisions", key: "decisions" },

@@ -5,7 +5,13 @@ from datetime import UTC, datetime
 import pytest
 
 from tradingbot.config import Settings
-from tradingbot.enums import BrokerSlug, InstrumentClass, OrderStatus, OrderType, TradingMode
+from tradingbot.enums import (
+    BrokerSlug,
+    InstrumentClass,
+    OrderStatus,
+    OrderType,
+    TradingMode,
+)
 from tradingbot.models import BotSettings
 from tradingbot.services.adapters import (
     AlpacaExecutionAdapter,
@@ -17,7 +23,9 @@ from tradingbot.services.adapters import (
 )
 
 
-def test_phase9_router_rejects_missing_permissions_before_execution_adapter_creation() -> None:
+def test_phase9_router_rejects_missing_permissions_before_execution_adapter_creation() -> (
+    None
+):
     settings_row = BotSettings(
         mode=TradingMode.PAPER,
         broker_slug=BrokerSlug.ALPACA,
@@ -126,3 +134,49 @@ def test_phase9_fetch_fills_maps_fee_field(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert len(fills) == 1
     assert fills[0].fee == pytest.approx(0.12)
+
+
+def test_phase9_india_paper_adapter_fills_nse_order_from_imported_bars(
+    tmp_path,
+) -> None:
+    from tradingbot.enums import OrderIntent, TimeInForce
+    from tradingbot.services.adapters import (
+        ImportedFileStore,
+        IndiaPaperExecutionAdapter,
+        OrderRequest,
+    )
+
+    bars_dir = tmp_path / "bars"
+    bars_dir.mkdir()
+    (bars_dir / "RELIANCE_NSE.json").write_text(
+        """
+        [
+          {"timestamp": "2026-05-14T03:45:00+00:00", "open": 2830.0, "high": 2842.5, "low": 2826.0, "close": 2838.75, "volume": 1250000}
+        ]
+        """.strip(),
+        encoding="utf-8",
+    )
+    settings_row = BotSettings(
+        id=7,
+        broker_slug=BrokerSlug.INTERNAL_PAPER,
+        broker_venue="NSE",
+        mode=TradingMode.PAPER,
+    )
+    adapter = IndiaPaperExecutionAdapter(
+        None, settings_row, store=ImportedFileStore(tmp_path)
+    )  # type: ignore[arg-type]
+
+    order = adapter.place_order(
+        OrderRequest(
+            symbol="RELIANCE.NSE",
+            quantity=3,
+            side=OrderIntent.BUY,
+            time_in_force=TimeInForce.DAY,
+            client_order_id="india-test-1",
+        )
+    )
+
+    assert order.status == OrderStatus.FILLED
+    assert order.average_fill_price == 2838.75
+    assert order.raw["provider"] == "india_paper"
+    assert order.raw["fill_qty"] == 3

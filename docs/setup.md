@@ -233,7 +233,7 @@ celery -A tradingbot.worker.celery_app:celery_app worker -B --loglevel=INFO
 
 ```bash
 cd web
-npm install
+npm ci
 npm run dev
 ```
 

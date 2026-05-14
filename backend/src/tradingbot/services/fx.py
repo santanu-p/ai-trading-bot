@@ -20,6 +20,7 @@ from tradingbot.services.metrics import observe_counter
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
 # Exchange rate data
 # ---------------------------------------------------------------------------
@@ -114,7 +115,9 @@ class FXService:
 
     def to_base(self, amount: float, *, from_currency: Currency) -> float:
         """Convert an amount to the base currency (default USD)."""
-        return self.convert(amount, from_currency=from_currency, to_currency=self.base_currency)
+        return self.convert(
+            amount, from_currency=from_currency, to_currency=self.base_currency
+        )
 
     def get_rate(self, base: Currency, quote: Currency) -> ExchangeRate:
         """Get the exchange rate from base to quote currency.
@@ -122,7 +125,13 @@ class FXService:
         Uses cache → API → fallback chain.
         """
         if base == quote:
-            return ExchangeRate(base=base, quote=quote, rate=1.0, as_of=datetime.now(UTC), source="identity")
+            return ExchangeRate(
+                base=base,
+                quote=quote,
+                rate=1.0,
+                as_of=datetime.now(UTC),
+                source="identity",
+            )
 
         # Check cache
         cached = _get_cached_rate(base, quote)
@@ -182,7 +191,13 @@ class FXService:
             "fx.rate_unavailable",
             extra={"base": base.value, "quote": quote.value},
         )
-        return ExchangeRate(base=base, quote=quote, rate=1.0, as_of=datetime.now(UTC), source="unknown_pair")
+        return ExchangeRate(
+            base=base,
+            quote=quote,
+            rate=1.0,
+            as_of=datetime.now(UTC),
+            source="unknown_pair",
+        )
 
     def _fetch_from_api(self, base: Currency, quote: Currency) -> ExchangeRate | None:
         """Try to fetch a rate from a free public FX API."""
@@ -194,7 +209,9 @@ class FXService:
                 data = json.loads(response.read().decode("utf-8"))
                 result = data.get("result")
                 if result is not None and float(result) > 0:
-                    observe_counter("fx.api_success", tags={"pair": f"{base.value}/{quote.value}"})
+                    observe_counter(
+                        "fx.api_success", tags={"pair": f"{base.value}/{quote.value}"}
+                    )
                     return ExchangeRate(
                         base=base,
                         quote=quote,
@@ -203,14 +220,19 @@ class FXService:
                         source="exchangerate.host",
                     )
         except (HTTPError, URLError, OSError, json.JSONDecodeError, ValueError) as exc:
-            observe_counter("fx.api_failure", tags={"pair": f"{base.value}/{quote.value}"})
-            logger.debug("fx.api_error", extra={"base": base.value, "quote": quote.value, "error": str(exc)})
+            observe_counter(
+                "fx.api_failure", tags={"pair": f"{base.value}/{quote.value}"}
+            )
+            logger.debug(
+                "fx.api_error",
+                extra={"base": base.value, "quote": quote.value, "error": str(exc)},
+            )
         return None
 
     def portfolio_exposure_in_base(
         self,
         positions: list[dict[str, Any]],
-    ) -> dict[str, float]:
+    ) -> dict[str, Any]:
         """Calculate portfolio exposure in base currency.
 
         Each position dict must have 'symbol', 'market_value', and 'currency'.

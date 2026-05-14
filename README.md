@@ -286,8 +286,8 @@ Open a **third terminal**:
 ```bash
 cd web
 
-# Install dependencies
-npm install
+# Install dependencies from the lockfile
+npm ci
 
 # Set the API URL
 # Linux/Mac:

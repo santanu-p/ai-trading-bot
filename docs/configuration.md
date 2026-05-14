@@ -63,6 +63,7 @@ The shared `ALPACA_API_*` pair is a fallback for development. If live trading is
 ### Trading tuning
 
 - `MARKET_TIMEZONE` — Default: `America/New_York`
+- `INDIA_IMPORT_ROOT` — Default: `data/india`; root for imported NSE/BSE/MCX bars and news used by the `india-paper` profile.
 - `SCAN_INTERVAL_MINUTES` — Default: `5`
 - `CONSENSUS_THRESHOLD` — Default: `0.64`
 - `MIN_APPROVAL_VOTES` — Default: `2`
