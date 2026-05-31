@@ -12,7 +12,7 @@ This repo treats strategy, prompt, execution, and risk-policy changes as control
 ## Repo Guardrails
 
 - pull requests now use the checked-in PR template to capture release ID, reviewer, evidence, rollback plan, and risk summary
-- `.github/workflows/release-guard.yml` blocks release-controlled PRs when the release metadata is missing from the PR body and release log, or `docs/strategy-change-log.md` is not updated
+- `.github/workflows/release-guard.yml` blocks release-controlled PRs when release metadata is missing from both the PR body and release log, or `docs/strategy-change-log.md` is not updated
 - the guard applies when changes touch strategy, prompt, execution, worker, or risk-policy files
 
 ## What This Does Not Enforce

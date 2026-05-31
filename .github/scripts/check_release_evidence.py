@@ -81,6 +81,7 @@ def _load_release_log() -> str:
 
 def _release_entries(log_text: str) -> list[str]:
     # Release-log entries are delimited by repeated `### Release ID:` headings.
+    # The checked-in log keeps each release as a contiguous block until the next heading.
     return re.findall(r"(?ms)^### Release ID:.*?(?=^### Release ID:|\Z)", log_text)
 
 
@@ -88,7 +89,8 @@ def _latest_release_entry(log_text: str) -> str:
     entries = _release_entries(log_text)
     if not entries:
         return ""
-    return max(entries, key=_release_entry_date)
+    ranked_entries = [(_release_entry_date(entry), index, entry) for index, entry in enumerate(entries)]
+    return max(ranked_entries, key=lambda item: (item[0], item[1]))[2]
 
 
 def _release_entry_date(entry: str) -> date:
