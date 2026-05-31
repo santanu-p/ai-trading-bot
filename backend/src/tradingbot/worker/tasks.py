@@ -32,6 +32,7 @@ from tradingbot.services.data_quality import DataQualityPolicy, DataQualityValid
 from tradingbot.services.events import extract_structured_events, serialize_structured_events
 from tradingbot.services.execution import ExecutionService
 from tradingbot.services.features import IndexContext, build_feature_snapshot, infer_market_index_context
+from tradingbot.services.memory import TradingMemoryService
 from tradingbot.services.metrics import observe_counter, observe_duration_ms
 from tradingbot.services.observability import bind_run_id
 from tradingbot.services.reconciliation import ReconciliationService
@@ -165,6 +166,7 @@ def _decision_payload(
     structured_events: list[dict[str, object]],
     index_context: IndexContext,
     committee_metadata: dict[str, Any] | None = None,
+    memory_context: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     payload: dict[str, object] = decision.model_dump(mode="json")
     payload["feature_snapshot"] = feature_snapshot
@@ -172,6 +174,8 @@ def _decision_payload(
     payload["data_timestamps"] = data_timestamps
     payload["structured_events"] = structured_events
     payload["market_index_context"] = index_context.to_payload()
+    if memory_context is not None:
+        payload["memory_context"] = memory_context
     if committee_metadata is not None:
         payload["committee_metadata"] = committee_metadata
     return payload
@@ -235,7 +239,8 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
         broker = build_broker_adapter(session, settings_row)
         market_data = build_market_data_adapter(settings_row)
         news_data = build_news_adapter(settings_row)
-        agent_runner = AgentRunner(settings_row.openai_model)
+        llm_model = settings_row.openai_model if settings.openai_api_key else None
+        agent_runner = AgentRunner(llm_model)
         committee = CommitteeService(settings_row.consensus_threshold, settings.min_approval_votes)
         risk_engine = _build_risk_engine(settings_row)
         execution = ExecutionService(session, broker, settings_row)
@@ -310,6 +315,7 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
         start = end - timedelta(minutes=settings_row.scan_interval_minutes * 40)
         queued = 0
         portfolio_risk = PortfolioRiskService(session, risk_engine.policy, profile_id=settings_row.id)
+        memory_service = TradingMemoryService(session, profile_id=settings_row.id)
         runtime_metrics = portfolio_risk.compute_runtime_metrics(
             equity=account.equity,
             positions=broker_positions,
@@ -504,6 +510,13 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
                     observe_counter("decision.rejected", tags={"reason": "execution_feedback"})
                     continue
 
+                memory_context = memory_service.build_context(item.symbol, as_of=end)
+                memory_risk_notes = [str(note) for note in memory_context.get("risk_notes", []) if str(note).strip()]
+                enriched_execution_feedback = {
+                    **execution_feedback,
+                    "memory": memory_context.get("execution_quality", []),
+                }
+
                 portfolio_context = {
                     "equity": round(account.equity, 4),
                     "buying_power": round(account.buying_power, 4),
@@ -520,7 +533,8 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
                         }
                         for position in broker_positions[:10]
                     ],
-                    "execution_quality": execution_feedback,
+                    "execution_quality": enriched_execution_feedback,
+                    "memory": memory_context,
                 }
                 with bind_run_id(run.id):
                     committee_result = agent_runner.run_structured_committee(
@@ -567,8 +581,8 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
                         equity_drawdown_pct=runtime_metrics.equity_drawdown_pct,
                         loss_streak=runtime_metrics.loss_streak,
                         recent_execution_failures=runtime_metrics.recent_execution_failures,
-                        pretrade_notes=cooldown_notes,
-                        execution_quality_feedback=execution_feedback,
+                        pretrade_notes=[*cooldown_notes, *memory_risk_notes],
+                        execution_quality_feedback=enriched_execution_feedback,
                     )
                 decision = committee.finalize(proposal, risk_result=risk_result)
                 decision_payload = _decision_payload(
@@ -579,6 +593,14 @@ def run_market_scan(profile_id: int | None = None) -> dict[str, int]:
                     structured_events=structured_event_payload,
                     index_context=index_context,
                     committee_metadata=committee_result.to_payload(),
+                    memory_context=memory_context,
+                )
+
+                memory_service.remember_decision(
+                    decision=decision,
+                    risk_result=risk_result,
+                    run_id=run.id,
+                    as_of=end,
                 )
 
                 session.add(

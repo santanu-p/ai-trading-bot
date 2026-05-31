@@ -2,7 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY pyproject.toml README.md /app/
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md alembic.ini /app/
+COPY alembic /app/alembic
 COPY src /app/src
 COPY data /app/data
 
