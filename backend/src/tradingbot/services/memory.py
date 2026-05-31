@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import UTC, datetime
 from statistics import mean
-from typing import Any
+from typing import Any, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -258,7 +258,7 @@ class TradingMemoryService:
                 occurrences=len(risk_events),
             )
 
-        cooldowns = self.session.scalars(
+        cooldowns: Sequence[SymbolCooldown] = self.session.scalars(
             select(SymbolCooldown)
             .where(SymbolCooldown.profile_id == self.profile_id)
             .where(SymbolCooldown.symbol == symbol)
@@ -267,24 +267,24 @@ class TradingMemoryService:
         ).all()
         active_cooldowns = [row for row in cooldowns if _as_aware(row.expires_at) > _as_aware(as_of)]
         if cooldowns:
-            source_rows = active_cooldowns or cooldowns
-            latest = source_rows[0]
+            source_rows: Sequence[SymbolCooldown] = active_cooldowns or cooldowns
+            latest_cooldown = source_rows[0]
             self._upsert(
                 symbol=symbol,
                 memory_type="risk",
                 memory_key="cooldowns",
                 summary=(
                     f"{symbol} has {len(active_cooldowns)} active and {len(cooldowns)} recent cooldown records. "
-                    f"Latest {latest.cooldown_type}: {_truncate(latest.reason, 180)}"
+                    f"Latest {latest_cooldown.cooldown_type}: {_truncate(latest_cooldown.reason, 180)}"
                 ),
                 score=0.9 if active_cooldowns else 0.55,
                 source="symbol_cooldowns",
                 payload={
                     "active_count": len(active_cooldowns),
                     "recent_count": len(cooldowns),
-                    "latest_cooldown_type": latest.cooldown_type,
-                    "latest_expires_at": latest.expires_at.isoformat(),
-                    "latest_context": latest.context_json,
+                    "latest_cooldown_type": latest_cooldown.cooldown_type,
+                    "latest_expires_at": latest_cooldown.expires_at.isoformat(),
+                    "latest_context": latest_cooldown.context_json,
                 },
                 as_of=as_of,
                 occurrences=len(cooldowns),
