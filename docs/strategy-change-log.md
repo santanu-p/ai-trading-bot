@@ -20,6 +20,11 @@ Each entry is expected to carry replay evidence and rollback notes.
 
 ### Release ID: durable-agent-memory-v1
 
+- Release ID: durable-agent-memory-v1
+- Independent Reviewer: admin operator
+- Release Evidence: backend memory service coverage in [backend/tests/test_memory_service.py](../backend/tests/test_memory_service.py)
+- Rollback Plan: remove the memory service integration from scan/review flows and drop the agent-memory migration if durable rollups need to be disabled
+- Risk Change Summary: adds durable per-symbol memory rollups for decisions, reviews, cooldowns, and execution-quality lessons
 - Date (UTC): 2026-05-31
 - Scope: durable agent memory storage and scan/review integration
 - Prompt/version changes: committee payload now includes compact memory context for prior decisions, cooldowns, and execution-quality lessons
@@ -27,7 +32,6 @@ Each entry is expected to carry replay evidence and rollback notes.
 - Execution-behavior changes: trade reviews persist memory summaries, and market scans write/read durable per-symbol memories during decisioning
 - Threshold/config changes: none
 - Replay evidence: backend memory service coverage in [backend/tests/test_memory_service.py](../backend/tests/test_memory_service.py)
-- Rollback plan: remove the memory service integration from scan/review flows and drop the agent-memory migration if durable rollups need to be disabled
 - Approver: admin operator
 
 ### Release ID: phase11-market-efficiency-ops-v1

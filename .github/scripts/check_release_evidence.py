@@ -74,8 +74,17 @@ def _load_pr_body(event_path: str | None) -> str:
     return body if isinstance(body, str) else ""
 
 
+def _load_release_log() -> str:
+    return Path.cwd().joinpath(RELEASE_LOG_PATH).read_text(encoding="utf-8")
+
+
+def _latest_release_entry(log_text: str) -> str:
+    match = re.search(r"(?ms)^### Release ID:.*?(?=^### Release ID:|\Z)", log_text)
+    return match.group(0) if match else ""
+
+
 def _field_value(body: str, label: str) -> str | None:
-    match = re.search(rf"(?im)^{re.escape(label)}\s*:\s*(.+)$", body)
+    match = re.search(rf"(?im)^(?:-\s*)?{re.escape(label)}\s*:\s*(.+)$", body)
     if not match:
         return None
     return match.group(1).strip()
@@ -106,9 +115,10 @@ def main() -> int:
         errors.append(f"{RELEASE_LOG_PATH} must be updated for release-controlled changes.")
 
     body = _load_pr_body(args.event_path)
+    release_entry = _latest_release_entry(_load_release_log()) if RELEASE_LOG_PATH in changed_files else ""
     for label in REQUIRED_FIELDS:
-        if _is_missing(_field_value(body, label)):
-            errors.append(f"PR body field '{label}' is required for release-controlled changes.")
+        if _is_missing(_field_value(body, label)) and _is_missing(_field_value(release_entry, label)):
+            errors.append(f"Release metadata field '{label}' is required for release-controlled changes.")
 
     if errors:
         print("release-guard failed:", file=sys.stderr)
