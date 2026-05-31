@@ -187,6 +187,9 @@ class TradeReviewService:
         self.session.add(review)
         self.session.flush()
 
+        from tradingbot.services.memory import TradingMemoryService
+
+        TradingMemoryService(self.session, profile_id=review.profile_id).remember_trade_review(review)
         if status == "queued":
             self._flag_recurring_pattern(review)
 

@@ -418,6 +418,26 @@ class RiskEvent(Base, TimestampMixin):
     payload: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class AgentMemory(Base, TimestampMixin):
+    __tablename__ = "agent_memories"
+    __table_args__ = (
+        UniqueConstraint("profile_id", "symbol", "memory_type", "memory_key", name="uq_agent_memory_profile_symbol_type_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("bot_settings.id"), index=True, default=1)
+    symbol: Mapped[str] = mapped_column(String(48), index=True)
+    memory_type: Mapped[str] = mapped_column(String(32), index=True)
+    memory_key: Mapped[str] = mapped_column(String(120), index=True)
+    summary: Mapped[str] = mapped_column(Text)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    source: Mapped[str] = mapped_column(String(60), default="system")
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
 class PortfolioSnapshot(Base, TimestampMixin):
     __tablename__ = "portfolio_snapshots"
 

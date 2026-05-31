@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 
@@ -74,11 +75,47 @@ def _load_pr_body(event_path: str | None) -> str:
     return body if isinstance(body, str) else ""
 
 
+def _load_release_log() -> str:
+    return Path.cwd().joinpath(RELEASE_LOG_PATH).read_text(encoding="utf-8")
+
+
+def _release_entries(log_text: str) -> list[str]:
+    # Release-log entries are delimited by repeated `### Release ID:` headings.
+    # The checked-in log keeps each release as a contiguous block until the next heading.
+    return re.findall(r"(?ms)^### Release ID:.*?(?=^### Release ID:|\Z)", log_text)
+
+
+def _latest_release_entry(log_text: str) -> str:
+    entries = _release_entries(log_text)
+    if not entries:
+        return ""
+    ranked_entries = [(_release_entry_date(entry), index, entry) for index, entry in enumerate(entries)]
+    return max(ranked_entries, key=lambda item: (item[0], item[1]))[2]
+
+
+def _release_entry_date(entry: str) -> date:
+    match = re.search(r"(?im)^-\s*Date\s*\(UTC\):\s*(.+)$", entry)
+    if not match:
+        return date.min
+    try:
+        return date.fromisoformat(match.group(1).strip())
+    except ValueError:
+        return date.min
+
+
 def _field_value(body: str, label: str) -> str | None:
-    match = re.search(rf"(?im)^{re.escape(label)}\s*:\s*(.+)$", body)
+    # Accept both checked-in PR bodies and the release log entry format.
+    match = re.search(rf"(?im)^(?:-\s*)?{re.escape(label)}\s*:\s*(.+)$", body)
     if not match:
         return None
     return match.group(1).strip()
+
+
+def _release_entry_value(entry: str, label: str) -> str | None:
+    if label == "Release ID":
+        match = re.search(r"(?im)^### Release ID:\s*(.+)$", entry)
+        return match.group(1).strip() if match else None
+    return _field_value(entry, label)
 
 
 def _is_missing(value: str | None) -> bool:
@@ -106,9 +143,10 @@ def main() -> int:
         errors.append(f"{RELEASE_LOG_PATH} must be updated for release-controlled changes.")
 
     body = _load_pr_body(args.event_path)
+    release_entry = _latest_release_entry(_load_release_log()) if RELEASE_LOG_PATH in changed_files else ""
     for label in REQUIRED_FIELDS:
-        if _is_missing(_field_value(body, label)):
-            errors.append(f"PR body field '{label}' is required for release-controlled changes.")
+        if _is_missing(_field_value(body, label)) and _is_missing(_release_entry_value(release_entry, label)):
+            errors.append(f"Release metadata field '{label}' is required for release-controlled changes.")
 
     if errors:
         print("release-guard failed:", file=sys.stderr)
