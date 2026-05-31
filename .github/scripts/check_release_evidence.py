@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import date
 from pathlib import Path
 
 
@@ -79,6 +80,7 @@ def _load_release_log() -> str:
 
 
 def _release_entries(log_text: str) -> list[str]:
+    # Release-log entries are delimited by repeated `### Release ID:` headings.
     return re.findall(r"(?ms)^### Release ID:.*?(?=^### Release ID:|\Z)", log_text)
 
 
@@ -89,9 +91,14 @@ def _latest_release_entry(log_text: str) -> str:
     return max(entries, key=_release_entry_date)
 
 
-def _release_entry_date(entry: str) -> str:
+def _release_entry_date(entry: str) -> date:
     match = re.search(r"(?im)^-\s*Date\s*\(UTC\):\s*(.+)$", entry)
-    return match.group(1).strip() if match else ""
+    if not match:
+        return date.min
+    try:
+        return date.fromisoformat(match.group(1).strip())
+    except ValueError:
+        return date.min
 
 
 def _field_value(body: str, label: str) -> str | None:
