@@ -20,7 +20,6 @@ Each entry is expected to carry replay evidence and rollback notes.
 
 ### Release ID: durable-agent-memory-v1
 
-- Release ID: durable-agent-memory-v1
 - Independent Reviewer: admin operator
 - Release Evidence: backend memory service coverage in [backend/tests/test_memory_service.py](../backend/tests/test_memory_service.py)
 - Rollback Plan: remove the memory service integration from scan/review flows and drop the agent-memory migration if durable rollups need to be disabled

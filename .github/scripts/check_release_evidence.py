@@ -78,16 +78,35 @@ def _load_release_log() -> str:
     return Path.cwd().joinpath(RELEASE_LOG_PATH).read_text(encoding="utf-8")
 
 
+def _release_entries(log_text: str) -> list[str]:
+    return re.findall(r"(?ms)^### Release ID:.*?(?=^### Release ID:|\Z)", log_text)
+
+
 def _latest_release_entry(log_text: str) -> str:
-    match = re.search(r"(?ms)^### Release ID:.*?(?=^### Release ID:|\Z)", log_text)
-    return match.group(0) if match else ""
+    entries = _release_entries(log_text)
+    if not entries:
+        return ""
+    return max(entries, key=_release_entry_date)
+
+
+def _release_entry_date(entry: str) -> str:
+    match = re.search(r"(?im)^-\s*Date\s*\(UTC\):\s*(.+)$", entry)
+    return match.group(1).strip() if match else ""
 
 
 def _field_value(body: str, label: str) -> str | None:
+    # Accept both checked-in PR bodies and the release log entry format.
     match = re.search(rf"(?im)^(?:-\s*)?{re.escape(label)}\s*:\s*(.+)$", body)
     if not match:
         return None
     return match.group(1).strip()
+
+
+def _release_entry_value(entry: str, label: str) -> str | None:
+    if label == "Release ID":
+        match = re.search(r"(?im)^### Release ID:\s*(.+)$", entry)
+        return match.group(1).strip() if match else None
+    return _field_value(entry, label)
 
 
 def _is_missing(value: str | None) -> bool:
@@ -117,7 +136,7 @@ def main() -> int:
     body = _load_pr_body(args.event_path)
     release_entry = _latest_release_entry(_load_release_log()) if RELEASE_LOG_PATH in changed_files else ""
     for label in REQUIRED_FIELDS:
-        if _is_missing(_field_value(body, label)) and _is_missing(_field_value(release_entry, label)):
+        if _is_missing(_field_value(body, label)) and _is_missing(_release_entry_value(release_entry, label)):
             errors.append(f"Release metadata field '{label}' is required for release-controlled changes.")
 
     if errors:
